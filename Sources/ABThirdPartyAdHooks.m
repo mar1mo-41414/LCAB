@@ -316,6 +316,7 @@ AB_DEFINE_HIDE_BANNER_HOOK(AB_IMBanner_didMoveToWindow, ABOriginalIMBannerDidMov
 AB_DEFINE_HIDE_BANNER_HOOK(AB_AdSurgeBannerAdView_didMoveToWindow, ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_MolocoBannerAdView_didMoveToWindow, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_UADSBannerView_didMoveToWindow, ABOriginalUADSBannerViewDidMoveToWindowIMP)
+AB_DEFINE_HIDE_BANNER_HOOK(AB_UADSBannerWrapperView_didMoveToWindow, ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP)
 
 /// 対象クラス自身がdidMoveToWindowをオーバーライドしていない場合でも、継承元(UIViewなど)を
 /// 巻き込まずそのクラス専用の実装として安全に差し込む(ABSwizzleInstanceMethodKeepingOriginal参照)。
@@ -475,6 +476,11 @@ void ABInstallThirdPartyAdHooks(void) {
     ABLogSwizzle(@"UADSRewardedAd.show:delegate:",
                  ABSwizzleInstanceMethod(@"UADSRewardedAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_UADSRewardedAd_show_delegate, kTypesArgArg));
     ABInstallHideBannerHook(@"UADSBannerView", (IMP)AB_UADSBannerView_didMoveToWindow, &ABOriginalUADSBannerViewDidMoveToWindowIMP);
+    // UADSBannerViewを包む中間View(SDKバージョンによって存在)。バナー自体を隠す保険として両方叩く。
+    ABInstallHideBannerHook(@"UADSBannerWrapperView", (IMP)AB_UADSBannerWrapperView_didMoveToWindow, &ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP);
+    // UADSBannerAdはロード管理を担うクラスで、displayBannerが実際の表示トリガー。
+    ABLogSwizzle(@"UADSBannerAd.displayBanner",
+                 ABSwizzleInstanceMethod(@"UADSBannerAd", NSSelectorFromString(@"displayBanner"), (IMP)AB_NoOp_Void, kTypesVoid));
 
     // Unity Ads本体のレガシー静的API。`+[UnityAds show:placementId:options:]` /
     // `+[UnityAds show:placementId:options:showDelegate:]`というクラスメソッド(インスタンスではない)。

@@ -35,7 +35,7 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 | InMobi | `IMInterstitial` / `IMBanner` | show系をno-op化、バナーは非表示化 |
 | AdSurgeSDK(AppLovin MAXのカスタムメディエーション、Tencent GDTベース) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | show系をno-op化、バナーは非表示化 |
 | Moloco | `PublisherFullscreenAd`(Interstitial/Rewarded共用実体) / `MolocoBannerAdView` | show系をno-op化、バナーは非表示化 |
-| Unity Ads本体(SDK 4.x系) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` | show系をno-op化、バナーは非表示化 |
+| Unity Ads本体(SDK 4.x系) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | show/displayBanner系をno-op化、バナーは非表示化 |
 | Unity Ads本体(レガシー静的API) | `UnityAds`クラスメソッド `show:placementId:options:` / `show:placementId:options:showDelegate:` | show系をno-op化 |
 
 サードパーティSDKはアプリ・ビルドによって実装が含まれていないことがあるため、
