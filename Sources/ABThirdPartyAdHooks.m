@@ -301,6 +301,19 @@ static void AB_AdSurge_showAdFromRootViewController_customData_NoReward(id self,
 /// 実際に確認)、didMoveToWindow単発では不十分。setHidden:を乗っ取って常にYESを強制し、
 /// layoutSubviews(サイズ・位置の再計算のたびに呼ばれる)のたびにも再度hidden化・frameゼロ化する
 /// ことで、SDK側が何度書き戻しても最終的に非表示状態を維持する。
+/// 既にhidden/frameゼロなら再設定しない(冪等性ガード)。UIKitのsetFrame:/setHidden:は
+/// 値が変わらなくても内部的にsetNeedsLayoutを叩くことがあり、Auto Layout制約と直接frame設定が
+/// 競合していると「layoutSubviews→frame再設定→再度layoutSubviews」の連鎖でメインスレッドが
+/// 無限ループしフリーズする(InMobiのIMBannerで実際に発生)。無条件の再設定を避けることで防ぐ。
+static void ABForceHiddenAndZeroFrame(UIView *view) {
+    if (!view.hidden) {
+        view.hidden = YES;
+    }
+    if (!CGRectEqualToRect(view.frame, CGRectZero)) {
+        view.frame = CGRectZero;
+    }
+}
+
 #define AB_DEFINE_HIDE_BANNER_HOOK_SET(prefix, didMoveVar, setHiddenVar, layoutVar) \
     static IMP didMoveVar = NULL; \
     static IMP setHiddenVar = NULL; \
@@ -310,8 +323,7 @@ static void AB_AdSurge_showAdFromRootViewController_customData_NoReward(id self,
         if (didMoveVar) { \
             ((void (*)(id, SEL))didMoveVar)(self, _cmd); \
         } \
-        self.hidden = YES; \
-        self.frame = CGRectZero; \
+        ABForceHiddenAndZeroFrame(self); \
     } \
     static void prefix##_setHidden(UIView *self, SEL _cmd, BOOL hidden) { \
         if (setHiddenVar) { \
@@ -319,11 +331,12 @@ static void AB_AdSurge_showAdFromRootViewController_customData_NoReward(id self,
         } \
     } \
     static void prefix##_layoutSubviews(UIView *self, SEL _cmd) { \
-        if (layoutVar) { \
-            ((void (*)(id, SEL))layoutVar)(self, _cmd); \
-        } \
-        self.hidden = YES; \
-        self.frame = CGRectZero; \
+        /* 元の実装はあえて呼ばない: SDK側がlayoutSubviews内でframeを有効なサイズへ強制的に \
+           書き戻すロジックを持っていると、ABForceHiddenAndZeroFrameとの間でレイアウトの \
+           無限ループを起こしフリーズする(InMobiのIMBannerで実際に発生した)。バナーを隠す \
+           ことが目的で内部レイアウトの更新自体に価値はないため、呼ばずにスキップする。 */ \
+        (void)layoutVar; \
+        ABForceHiddenAndZeroFrame(self); \
     }
 
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_GADBannerView, ABOriginalGADBannerViewDidMoveToWindowIMP, ABOriginalGADBannerViewSetHiddenIMP, ABOriginalGADBannerViewLayoutSubviewsIMP)
