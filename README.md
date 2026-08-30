@@ -45,16 +45,50 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 ## 仕組み
 
 CydiaSubstrateの`%hook`(Logos)ではなく、素のObjective-Cランタイムでの
-method swizzling(`method_setImplementation`)を使っています。LiveContainerの
-in-process注入環境ではCydiaSubstrateが前提にできないため、姉妹プロジェクトの
-[LCME (iOS_LC_MemEditor)](https://github.com/mar1mo-41414/LCME)と同じ方式です。
+method swizzlingを使っています。LiveContainerのin-process注入環境ではCydiaSubstrateが
+前提にできないため、姉妹プロジェクトの[LCME (iOS_LC_MemEditor)](https://github.com/mar1mo-41414/LCME)
+と同じ方式です。
 
-`__attribute__((constructor))`でdylibロード時に自動的にフックをインストールします。
+`__attribute__((constructor))`でdylibロード時に自動的にフックをインストールし、
+`UIApplicationDidFinishLaunchingNotification`後にもう一度同じインストール処理を実行します
+(UnityFrameworkのような追加dylibが、constructor実行時点ではまだロード・クラス登録されていない
+ことがあるため)。
 
-- `Sources/ABSwizzle.{h,m}`: クラス・セレクタの実行時存在確認付きでIMPを差し替える共通ヘルパー
+- `Sources/ABSwizzle.{h,m}`: クラス・セレクタの実行時存在確認付きでIMPを差し替える共通ヘルパー。
+  `class_getInstanceMethod`+`method_setImplementation`をそのまま使うと、対象クラス自身が
+  そのセレクタを独自実装していない場合(継承しているだけの場合)に継承元(`UIView`など多数の
+  クラスが継承する共通基底クラス)のメソッドテーブルごと書き換えてしまう(実際に発生し、
+  アプリ全体のUI描画が壊れる重大な不具合を起こした)。これを避けるため、まず`class_addMethod`で
+  対象クラス自身への新規追加を試み、追加できた場合はそれで完了、既にそのクラス自身が
+  オーバーライド済みで追加できない場合のみ`method_setImplementation`で直接差し替える。
 - `Sources/ABStoreKitHooks.{h,m}`: Apple純正StoreKit機構のフック
 - `Sources/ABThirdPartyAdHooks.{h,m}`: サードパーティ広告SDKのフック
+- `Sources/ABDebugLog.{h,m}`: 診断用の簡易ロガー。アプリのDocuments配下に`lcadblocker.log`を
+  書き出し、フックのインストール成否・実際に発火したフック・リワード付与時のdelegate通知結果を
+  記録する。未知の広告SDKやSDKバージョン差異による対応漏れを調査する際に使う。
 - `Sources/ABConstructor.m`: エントリポイント
+
+### バナー広告の非表示化
+
+バナー広告Viewは表示トリガーとなるメソッド呼び出しがなく、window階層に追加された時点で
+自動的に画面に見えるようになる。`didMoveToWindow`だけをフックしても、SDK側が自動リフレッシュ
+のタイミングなどで非同期に`hidden`を書き戻してくることがある(AppLovin MAXの`MAAdView`で実際に
+発生)ため、`setHidden:`も乗っ取って渡された値に関わらず常に`YES`を強制する。
+
+`frame`を`CGRectZero`に直接書き換える案も試したが、Auto Layout制約下のView(InMobiの
+`IMBanner`で実際に発生)では「frame変更→制約違反→再レイアウト要求→`layoutSubviews`再呼び出し→
+SDK側がframeを書き戻す→……」という循環でメインスレッドがフリーズしたため撤廃した。
+`hidden`の強制だけで画面上には表示されなくなるので、`frame`はSDK/Auto Layoutの管理に委ねている。
+
+### リワード広告の報酬付与とMAAdのキャプチャ
+
+リワード広告のshowをブロックした後、広告を見た体でSDK側のdelegateに成功を通知することで
+ゲーム側の処理を続行させる(詳細は下記「既知の制約」参照)。AppLovin MAXについては、
+delegateの実装(公式Unity Pluginの`MAUnityAdManager`、ソースはGitHubで公開)が
+`ad.adUnitIdentifier`等をNSDictionaryリテラルに直接詰めるため、`ad`引数にnilや偽装
+オブジェクトを渡すとクラッシュしうることが判明した。そのため`didLoadAd:`を横取りして
+実際にロードされた本物の`MAAd`インスタンスをフォーマット別(interstitial/rewarded/appOpen)に
+キャプチャしておき、show断念時にそれを使い回している。
 
 ## ビルド
 
