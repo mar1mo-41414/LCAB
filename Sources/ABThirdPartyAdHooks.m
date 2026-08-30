@@ -89,14 +89,95 @@ static void ABCallDelegate2(id delegate, SEL sel, id arg1, id arg2) {
     }
 }
 
+#pragma mark - AppLovin MAX: ロード済みMAAdのキャプチャ
+#pragma mark   MAUnityAdManager(AppLovin公式Unityプラグインのdelegate実装、GitHub上のソースで確認済み)は
+#pragma mark   didDisplayAd:/didHideAd:/didRewardUserForAd:withReward:の冒頭で必ずad.formatを参照し、
+#pragma mark   nilなら即return、その先のadInfoForAd:ではad.adUnitIdentifier等をNSDictionaryリテラルに
+#pragma mark   直接詰めるため値がnilだとクラッシュする。ad引数を安全な偽オブジェクトで代用するのは
+#pragma mark   現実的でないため、事前にdidLoadAd:を横取りして本物のMAAdインスタンスを保存しておき、
+#pragma mark   show断念時にそれを使い回す。
+
+static NSMapTable<NSString *, id> *ABMAXLastLoadedAdByFormatKey = nil;
+
+/// ad.formatを見て "REWARDED" / "INTERSTITIAL" / "APPOPEN" のいずれかに分類する。
+static NSString *_Nullable ABMAXFormatKeyForAd(id ad) {
+    if (!ad || ![ad respondsToSelector:@selector(format)]) {
+        return nil;
+    }
+    id format = ((id (*)(id, SEL))objc_msgSend)(ad, @selector(format));
+    if (!format) {
+        return nil;
+    }
+    NSString *desc = [format description] ?: @"";
+    if ([desc rangeOfString:@"REWARD" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return @"REWARDED";
+    }
+    if ([desc rangeOfString:@"APP_OPEN" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+        [desc rangeOfString:@"APPOPEN" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return @"APPOPEN";
+    }
+    if ([desc rangeOfString:@"INTER" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return @"INTERSTITIAL";
+    }
+    return nil;
+}
+
+static NSString *_Nullable ABMAXFormatKeyForInstance(id self) {
+    NSString *className = NSStringFromClass([self class]);
+    if ([className isEqualToString:@"MARewardedAd"]) return @"REWARDED";
+    if ([className isEqualToString:@"MAInterstitialAd"]) return @"INTERSTITIAL";
+    if ([className isEqualToString:@"MAAppOpenAd"]) return @"APPOPEN";
+    return nil;
+}
+
+static IMP ABOriginalMAUnityAdManagerDidLoadAdIMP = NULL;
+static void AB_MAUnityAdManager_didLoadAd(id self, SEL _cmd, id ad) {
+    NSString *key = ABMAXFormatKeyForAd(ad);
+    if (key) {
+        if (!ABMAXLastLoadedAdByFormatKey) {
+            ABMAXLastLoadedAdByFormatKey = [NSMapTable strongToStrongObjectsMapTable];
+        }
+        [ABMAXLastLoadedAdByFormatKey setObject:ad forKey:key];
+        ABDebugLog(@"[REWARD]   captured loaded MAAd for format=%@", key);
+    }
+    // 元の実装(Unity C#へのイベント転送、バナーのpositioning等)は必ず継続させる。
+    if (ABOriginalMAUnityAdManagerDidLoadAdIMP) {
+        ((void (*)(id, SEL, id))ABOriginalMAUnityAdManagerDidLoadAdIMP)(self, _cmd, ad);
+    }
+}
+
+/// MAUnityAdManagerクラス名を直接対象にdidLoadAd:をフックする。show呼び出し時点で
+/// delegateから遡ってフックしようとすると、その広告のdidLoadAd:は既に発火した後で
+/// 手遅れになるため、dylibロード時(他のフックと同じタイミング)に前もってインストールする。
+static BOOL ABMAUnityAdManagerHookInstalled = NO;
+static void ABInstallMAUnityAdManagerCaptureHook(void) {
+    if (ABMAUnityAdManagerHookInstalled) {
+        return;
+    }
+    Class cls = NSClassFromString(@"MAUnityAdManager");
+    if (!cls) {
+        ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> NG (class not found)");
+        return;
+    }
+    BOOL ok = ABSwizzleInstanceMethodKeepingOriginal(cls, NSSelectorFromString(@"didLoadAd:"), (IMP)AB_MAUnityAdManager_didLoadAd, kTypesArg, &ABOriginalMAUnityAdManagerDidLoadAdIMP);
+    if (ok) {
+        ABMAUnityAdManagerHookInstalled = YES;
+    }
+    ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> %@", ok ? @"OK" : @"NG");
+}
+
 /// AppLovin MAX系(MAAdDelegate/MARewardedAdDelegate)。表示成功→(報酬)→非表示を順に通知する。
+/// ad引数は可能な限り本物のMAAdインスタンス(事前にロード済みならキャプチャ済み)を使う。
 static void ABNotifyMAXDelegate(id self, BOOL grantReward) {
     id delegate = ABGetDelegate(self);
-    ABCallDelegate1(delegate, NSSelectorFromString(@"didDisplayAd:"), nil);
+    NSString *formatKey = ABMAXFormatKeyForInstance(self);
+    id capturedAd = (formatKey && ABMAXLastLoadedAdByFormatKey) ? [ABMAXLastLoadedAdByFormatKey objectForKey:formatKey] : nil;
+    ABDebugLog(@"[REWARD]   formatKey=%@ capturedAd=%@", formatKey, capturedAd ? @"found" : @"nil(fallback)");
+    ABCallDelegate1(delegate, NSSelectorFromString(@"didDisplayAd:"), capturedAd);
     if (grantReward) {
-        ABCallDelegate2(delegate, NSSelectorFromString(@"didRewardUserForAd:withReward:"), nil, nil);
+        ABCallDelegate2(delegate, NSSelectorFromString(@"didRewardUserForAd:withReward:"), capturedAd, nil);
     }
-    ABCallDelegate1(delegate, NSSelectorFromString(@"didHideAd:"), nil);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"didHideAd:"), capturedAd);
 }
 
 static void AB_MAX_ShowAd_Reward(id self, SEL _cmd) {
@@ -354,6 +435,9 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallMAXFullscreenAdHooks(@"MARewardedAd", YES);
     ABInstallMAXFullscreenAdHooks(@"MAAppOpenAd", NO);
     ABInstallHideBannerHook(@"MAAdView", (IMP)AB_MAAdView_didMoveToWindow, &ABOriginalMAAdViewDidMoveToWindowIMP);
+    // Unity統合ではMAUnityAdManagerがロード済み広告のMAAdインスタンスを保持しているため、
+    // その受け渡し口(didLoadAd:)を横取りしてキャプチャしておく(ABNotifyMAXDelegateが使う)。
+    ABInstallMAUnityAdManagerCaptureHook();
 
     // Chartboost
     ABLogSwizzle(@"CHBInterstitial.showFromViewController:",
