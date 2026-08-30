@@ -15,6 +15,26 @@ static const char *const kTypesArgArgArg = "v@:@@@";
 static const char *const kTypesArgArgArgArg = "v@:@@@@";
 static const char *const kTypesBool = "v@:B";
 
+/// 同じ内容のインストールログを繰り返し出さないようにする。dyldの新規イメージロードのたびに
+/// インストール処理全体が再実行される(ABConstructor.m参照)ため、素朴に毎回ログを出すと
+/// ファイルI/Oだけで無視できないコストになる。ラベルごとに「最後に記録した結果」を覚えておき、
+/// 結果が変化した場合(NG→OK、あるいは未記録)のときだけ実際にログへ書き込む。
+static BOOL ABShouldLogInstallResult(NSString *label, BOOL ok) {
+    static NSMutableDictionary<NSString *, NSNumber *> *lastResults;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        lastResults = [NSMutableDictionary dictionary];
+    });
+    @synchronized (lastResults) {
+        NSNumber *last = lastResults[label];
+        if (last && last.boolValue == ok) {
+            return NO;
+        }
+        lastResults[label] = @(ok);
+        return YES;
+    }
+}
+
 #pragma mark - 汎用no-op実装
 
 /// 呼ばれたクラス名・セレクタを診断ログに残す。self=インスタンスならそのクラス、
@@ -157,14 +177,18 @@ static void ABInstallMAUnityAdManagerCaptureHook(void) {
     }
     Class cls = NSClassFromString(@"MAUnityAdManager");
     if (!cls) {
-        ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> NG (class not found)");
+        if (ABShouldLogInstallResult(@"MAUnityAdManager.didLoadAd:", NO)) {
+            ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> NG (class not found)");
+        }
         return;
     }
     BOOL ok = ABSwizzleInstanceMethodKeepingOriginal(cls, NSSelectorFromString(@"didLoadAd:"), (IMP)AB_MAUnityAdManager_didLoadAd, kTypesArg, &ABOriginalMAUnityAdManagerDidLoadAdIMP);
     if (ok) {
         ABMAUnityAdManagerHookInstalled = YES;
     }
-    ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> %@", ok ? @"OK" : @"NG");
+    if (ABShouldLogInstallResult(@"MAUnityAdManager.didLoadAd:", ok)) {
+        ABDebugLog(@"[INSTALL] MAUnityAdManager.didLoadAd: -> %@", ok ? @"OK" : @"NG");
+    }
 }
 
 /// AppLovin MAX系(MAAdDelegate/MARewardedAdDelegate)。表示成功→(報酬)→非表示を順に通知する。
@@ -353,14 +377,19 @@ static void ABInstallHideBannerHookSet(NSString *className,
                                         IMP layoutImp, IMP *layoutOriginal) {
     Class cls = NSClassFromString(className);
     if (!cls) {
-        ABDebugLog(@"[INSTALL] %@ banner hooks -> NG (class not found)", className);
+        if (ABShouldLogInstallResult(className, NO)) {
+            ABDebugLog(@"[INSTALL] %@ banner hooks -> NG (class not found)", className);
+        }
         return;
     }
     BOOL ok1 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), didMoveImp, kTypesVoid, didMoveOriginal);
     BOOL ok2 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setHidden:), setHiddenImp, kTypesBool, setHiddenOriginal);
     BOOL ok3 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(layoutSubviews), layoutImp, kTypesVoid, layoutOriginal);
-    ABDebugLog(@"[INSTALL] %@ didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", className,
-               ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+    BOOL allOk = ok1 && ok2 && ok3;
+    if (ABShouldLogInstallResult(className, allOk)) {
+        ABDebugLog(@"[INSTALL] %@ didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", className,
+                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+    }
 }
 
 static void ABInstallHideBannerHookSetBySuffix(NSString *classNameSuffix,
@@ -369,18 +398,25 @@ static void ABInstallHideBannerHookSetBySuffix(NSString *classNameSuffix,
                                                 IMP layoutImp, IMP *layoutOriginal) {
     Class cls = ABFindClassBySuffix(classNameSuffix);
     if (!cls) {
-        ABDebugLog(@"[INSTALL] *%@ banner hooks -> NG (class not found)", classNameSuffix);
+        if (ABShouldLogInstallResult(classNameSuffix, NO)) {
+            ABDebugLog(@"[INSTALL] *%@ banner hooks -> NG (class not found)", classNameSuffix);
+        }
         return;
     }
     BOOL ok1 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), didMoveImp, kTypesVoid, didMoveOriginal);
     BOOL ok2 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setHidden:), setHiddenImp, kTypesBool, setHiddenOriginal);
     BOOL ok3 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(layoutSubviews), layoutImp, kTypesVoid, layoutOriginal);
-    ABDebugLog(@"[INSTALL] %@ (matched *%@) didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", NSStringFromClass(cls), classNameSuffix,
-               ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+    BOOL allOk = ok1 && ok2 && ok3;
+    if (ABShouldLogInstallResult(classNameSuffix, allOk)) {
+        ABDebugLog(@"[INSTALL] %@ (matched *%@) didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", NSStringFromClass(cls), classNameSuffix,
+                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+    }
 }
 
 static void ABLogSwizzle(NSString *label, BOOL ok) {
-    ABDebugLog(@"[INSTALL] %@ -> %@", label, ok ? @"OK" : @"NG");
+    if (ABShouldLogInstallResult(label, ok)) {
+        ABDebugLog(@"[INSTALL] %@ -> %@", label, ok ? @"OK" : @"NG");
+    }
 }
 
 #pragma mark - AppLovin MAX (MAInterstitialAd/MARewardedAd/MAAppOpenAdは同じshow系APIを共有)

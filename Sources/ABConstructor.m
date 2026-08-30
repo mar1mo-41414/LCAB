@@ -19,8 +19,30 @@ static void ABReinstallAllHooks(void) {
 /// _dyld_register_func_for_add_imageは登録時点で既にロード済みの全イメージについても
 /// 遡ってコールバックするため、初回分の重複は問題ない(NSClassFromStringベースの
 /// インストールは何度実行しても安全)。
+///
+/// アプリ起動時には数百の共有ライブラリ(システムライブラリ含む)がロードされることがあり、
+/// 素朴に毎回メインキューへ再インストールタスクを積むと、そのタスクの山でメインスレッドが
+/// 埋め尽くされアプリが実質フリーズしたまま起動できなくなる不具合が実際に発生した
+/// (Autodiggers)。そのため「既にメインキューに再インストールタスクが積まれている間は
+/// 新たに積まない」というコアレッシングを行う(ABSwizzle側の成功キャッシュと合わせて、
+/// 1回の再インストール処理自体もイメージロードのたびに軽くなっていく)。
 static void ABOnImageAdded(const struct mach_header *mh, intptr_t vmaddr_slide) {
+    static BOOL pending = NO;
+    static NSObject *lock;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        lock = [NSObject new];
+    });
+    @synchronized (lock) {
+        if (pending) {
+            return;
+        }
+        pending = YES;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
+        @synchronized (lock) {
+            pending = NO;
+        }
         ABReinstallAllHooks();
     });
 }

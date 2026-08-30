@@ -59,9 +59,15 @@ On top of that, `_dyld_register_func_for_add_image` re-runs the install pass for
 library/framework loaded afterward. On mediation platforms like Appodeal, individual ad network
 SDKs (e.g. `AppLovinSDK.framework`) may not actually get loaded at app launch at all — only once
 the mediation layer initializes them, which can happen well after `didFinishLaunching` (e.g. after
-Unity's own C# code starts running) — so the two earlier capture points alone miss them. Since the
-`NSClassFromString`-based install pass is safe to run any number of times, this callback can be
-invoked freely without worrying about overhead.
+Unity's own C# code starts running) — so the two earlier capture points alone miss them.
+
+That said, an app launch can load hundreds of shared libraries (including system ones), and a
+naive "re-try every hook from scratch every time" implementation actually caused the app to hang
+and never finish launching, buried under a pile of queued reinstall tasks. Two mitigations fix
+this: (1) `ABSwizzle` keeps a success cache — a hook that already succeeded is never retried, so
+repeated `NSClassFromString` lookups and class-list rescans are skipped; (2) the dyld callback
+itself is coalesced — while a reinstall task is already queued on the main queue, new image-load
+events don't queue another one. Together, the work done per image load gets lighter over time.
 
 - `Sources/ABSwizzle.{h,m}`: shared helper that swaps an IMP only after confirming the
   class/selector exist at runtime. Using `class_getInstanceMethod`+`method_setImplementation`
