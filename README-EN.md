@@ -31,10 +31,11 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | Apple StoreKit | `SKStoreProductViewController` | Fails the product load and blocks presentation |
 | Apple StoreKit | `SKOverlay` | Ignores the present request |
 | Google AdMob | `GADInterstitialAd` / `GADRewardedAd` / `GADBannerView` | No-ops the show call, hides the banner |
-| Meta Audience Network | `FBInterstitialAd` / `FBAdView` | No-ops the show call, hides the banner |
+| Meta Audience Network | `FBInterstitialAd` / `FBRewardedVideoAd` / `FBAdView` | No-ops the show call, hides the banner |
 | ironSource | `ISBannerView` | Hides the banner |
-| AppLovin MAX | `MAInterstitialAd` | No-ops the show call |
+| AppLovin MAX | `MAInterstitialAd` / `MARewardedAd` / `MAAppOpenAd` / `MAAdView` | No-ops the show call, hides the banner |
 | Chartboost | `CHBInterstitial` | No-ops the show call |
+| InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
@@ -69,10 +70,14 @@ In LiveContainer's per-app tweak settings, add the built `LCAdBlocker.dylib` as 
 
 ## Known limitations
 
-- If the underlying ad SDK (e.g. Unity Ads) is implemented in Swift, non-`@objc` Swift methods
-  can't be hooked directly via the Objective-C runtime, so they're out of scope. Objective-C
-  mediation adapters statically linked into the app (AdMob/Meta/AppLovin/ironSource/Chartboost, etc.)
-  are the actual targets.
-- Rewarded ads (`GADRewardedAd`) disable the show call entirely, so the reward callback is never
-  invoked either — this avoids creating an exploit where a reward is granted without the user
-  actually watching an ad.
+- If the underlying ad SDK (e.g. Unity Ads, MolocoSDK) is implemented in Swift with a
+  protocol-based, non-`@objc` show API, it can't be hooked directly via the Objective-C runtime,
+  so it's out of scope. Objective-C mediation adapters statically linked into the app
+  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi, etc.) are the actual targets.
+  - InMobi is implemented in Swift, but the target classes (`IMInterstitial`/`IMBanner`) are
+    NSObject subclasses bridged to Objective-C, so they're hooked by matching a class-name suffix
+    instead of an exact name (the runtime class name is mangled by SDK version, e.g.
+    `_TtC9InMobiSDK14IMInterstitial`).
+- Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`) disable the show call
+  entirely, so the reward callback is never invoked either — this avoids creating an exploit
+  where a reward is granted without the user actually watching an ad.
