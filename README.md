@@ -35,6 +35,7 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 | InMobi | `IMInterstitial` / `IMBanner` | show系をno-op化、バナーは非表示化 |
 | AdSurgeSDK(AppLovin MAXのカスタムメディエーション、Tencent GDTベース) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | show系をno-op化、バナーは非表示化 |
 | Moloco | `PublisherFullscreenAd`(Interstitial/Rewarded共用実体) / `MolocoBannerAdView` | show系をno-op化、バナーは非表示化 |
+| Unity Ads本体(SDK 4.x系) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` | show系をno-op化、バナーは非表示化 |
 
 サードパーティSDKはアプリ・ビルドによって実装が含まれていないことがあるため、
 起動時に`NSClassFromString`でクラスの存在を確認してから動的にフックします。
@@ -69,13 +70,17 @@ LiveContainerの対象アプリのTweak設定で、ビルドした`LCAdBlocker.d
 
 ## 既知の制約
 
-- 広告SDK本体(Unity Adsなど)がSwift実装で、表示APIがprotocol existential経由でユーザーコードに
-  渡され、かつ具象実装クラスがNSObjectを継承しない(=Objective-Cランタイムに一切登録されない)場合は
-  対象外です。mediationアダプタとして静的リンクされるObjective-C実装/NSObjectブリッジ済みのSDK
-  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/Molocoなど)が対象になります。
+- 広告SDKがSwift実装で、表示APIがprotocol existential経由でユーザーコードに渡され、かつ
+  具象実装クラスがNSObjectを継承しない(=Objective-Cランタイムに一切登録されない)場合は対象外です。
+  mediationアダプタとして静的リンクされるObjective-C実装/NSObjectブリッジ済みのSDK
+  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/Moloco/Unity Adsなど)が対象になります。
   - InMobi・Molocoはどちらも内部実装がSwiftですが、対象クラス(`IMInterstitial`/`IMBanner`、
     `PublisherFullscreenAd`/`MolocoBannerAdView`)自体はNSObjectを継承したObjective-Cブリッジ済み
     クラスのため、クラス名サフィックス一致でフックしています(ランタイム上のクラス名はSDKバージョンに
     よって`_TtC9InMobiSDK14IMInterstitial`のようにマングルされます)。
+  - Unity AdsはSDK 4.x系以降、`UADSInterstitialAd`/`UADSRewardedAd`/`UADSBannerView`という
+    "UADS"プレフィックスでObjective-Cブリッジされた新APIを公開しており、これらはクラス名の
+    マングルもなく通常の`NSClassFromString`でフックできます。AppLovin MAXなどのUnity Adsメディエー
+    ションアダプタ経由で使われる場合も、最終的にはこの2クラスの`show:delegate:`が呼ばれます。
 - リワード広告(`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`)はshowそのものを無効化するため、
   報酬コールバックも呼ばれません(広告を見ずに報酬だけ得る不正な状態を作らないため)。

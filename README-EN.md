@@ -38,6 +38,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
 | AdSurgeSDK (AppLovin MAX custom mediation network, Tencent GDT-based) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | No-ops the show call, hides the banner |
 | Moloco | `PublisherFullscreenAd` (shared Interstitial/Rewarded implementation) / `MolocoBannerAdView` | No-ops the show call, hides the banner |
+| Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
@@ -72,16 +73,20 @@ In LiveContainer's per-app tweak settings, add the built `LCAdBlocker.dylib` as 
 
 ## Known limitations
 
-- If the underlying ad SDK (e.g. Unity Ads) is implemented in Swift, exposes its show API only as
-  a protocol existential, and the concrete implementation class doesn't subclass NSObject (i.e. is
-  never registered with the Objective-C runtime at all), it's out of scope. Objective-C /
-  NSObject-bridged mediation adapters statically linked into the app
-  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/Moloco, etc.) are the actual targets.
+- If an ad SDK is implemented in Swift, exposes its show API only as a protocol existential, and
+  the concrete implementation class doesn't subclass NSObject (i.e. is never registered with the
+  Objective-C runtime at all), it's out of scope. Objective-C / NSObject-bridged mediation
+  adapters statically linked into the app (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/
+  Moloco/Unity Ads, etc.) are the actual targets.
   - Both InMobi and Moloco are implemented in Swift internally, but their target classes
     (`IMInterstitial`/`IMBanner`, `PublisherFullscreenAd`/`MolocoBannerAdView`) are NSObject
     subclasses bridged to Objective-C, so they're hooked by matching a class-name suffix instead
     of an exact name (the runtime class name is mangled by SDK version, e.g.
     `_TtC9InMobiSDK14IMInterstitial`).
+  - Unity Ads exposes a newer "UADS"-prefixed Objective-C-bridged API since SDK 4.x
+    (`UADSInterstitialAd`/`UADSRewardedAd`/`UADSBannerView`), with no name mangling, so it's
+    hooked directly via `NSClassFromString`. Even when routed through a mediation adapter (e.g.
+    AppLovin MAX's Unity Ads adapter), the call ultimately reaches these two classes' `show:delegate:`.
 - Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`) disable the show call
   entirely, so the reward callback is never invoked either — this avoids creating an exploit
   where a reward is granted without the user actually watching an ad.
