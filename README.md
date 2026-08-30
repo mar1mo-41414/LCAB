@@ -83,5 +83,12 @@ LiveContainerの対象アプリのTweak設定で、ビルドした`LCAdBlocker.d
     "UADS"プレフィックスでObjective-Cブリッジされた新APIを公開しており、これらはクラス名の
     マングルもなく通常の`NSClassFromString`でフックできます。AppLovin MAXなどのUnity Adsメディエー
     ションアダプタ経由で使われる場合も、最終的にはこの2クラスの`show:delegate:`が呼ばれます。
-- リワード広告(`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`)はshowそのものを無効化するため、
-  報酬コールバックも呼ばれません(広告を見ずに報酬だけ得る不正な状態を作らないため)。
+- リワード広告(`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd` / `AdSurgeRewardedAd` /
+  `UADSRewardedAd` / MolocoのPublisherFullscreenAd)は、showそのものは無効化しつつ、
+  広告を見た体でSDK側に成功コールバック(delegate経由の`didRewardUserForAd:withReward:`相当、
+  またはブロック引数)を返すことで報酬を付与します。これは第三者へ不正な利益を与えるためではなく、
+  このdylib自身の利用者が広告を見ずに機能を使えるようにする(=広告ブロッカーとしての本来の目的)ための
+  ものです。delegateのメソッド名・シグネチャはSDKによって確証の強さが異なり
+  (AppLovin MAX/Google AdMobは公式APIに基づき確度が高い、他はベストエフォート)、
+  ad/rewardオブジェクトの引数はnilで渡します(Objective-Cのnilへのメッセージ送信は
+  プロパティアクセス程度なら安全にゼロ値を返すため)。

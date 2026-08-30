@@ -88,6 +88,13 @@ In LiveContainer's per-app tweak settings, add the built `LCAdBlocker.dylib` as 
     (`UADSInterstitialAd`/`UADSRewardedAd`/`UADSBannerView`), with no name mangling, so it's
     hooked directly via `NSClassFromString`. Even when routed through a mediation adapter (e.g.
     AppLovin MAX's Unity Ads adapter), the call ultimately reaches these two classes' `show:delegate:`.
-- Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`) disable the show call
-  entirely, so the reward callback is never invoked either — this avoids creating an exploit
-  where a reward is granted without the user actually watching an ad.
+- Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd` / `AdSurgeRewardedAd` /
+  `UADSRewardedAd` / Moloco's PublisherFullscreenAd) disable the show call, but still report
+  success back to the SDK as if the ad had been watched (the delegate's
+  `didRewardUserForAd:withReward:`-equivalent callback, or the completion block). This isn't
+  about granting an unfair advantage to third parties — it's this dylib's own user being able to
+  use the feature without watching an ad, which is the whole point of an ad blocker. Confidence in
+  the exact delegate method name/signature varies by SDK (AppLovin MAX and Google AdMob are based
+  on documented public APIs and are fairly reliable; the others are best-effort), and the
+  ad/reward arguments are passed as nil (sending a message to nil in Objective-C safely returns a
+  zero value for simple property access, so this is fine in practice).
