@@ -50,6 +50,7 @@ AB_DEFINE_HIDE_BANNER_HOOK(AB_FBAdView_didMoveToWindow, ABOriginalFBAdViewDidMov
 AB_DEFINE_HIDE_BANNER_HOOK(AB_ISBannerView_didMoveToWindow, ABOriginalISBannerViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_MAAdView_didMoveToWindow, ABOriginalMAAdViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_IMBanner_didMoveToWindow, ABOriginalIMBannerDidMoveToWindowIMP)
+AB_DEFINE_HIDE_BANNER_HOOK(AB_AdSurgeBannerAdView_didMoveToWindow, ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP)
 
 static void ABInstallHideBannerHook(NSString *className, IMP newImp, IMP *originalImpOut) {
     Class cls = NSClassFromString(className);
@@ -85,6 +86,14 @@ static void ABInstallMAXFullscreenAdHooks(NSString *className) {
     ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdForPlacement:customData:"), (IMP)AB_NoOp_WithArgArg);
 }
 
+#pragma mark - AdSurgeSDK (AppLovin MAXのカスタムメディエーションアダプタ経由、Tencent GDTベース。
+#pragma mark   インタースティシャル/リワード/アプリ起動時オープン広告でプレイアブル広告クリエイティブを配信する)
+
+static void ABInstallAdSurgeFullscreenAdHooks(NSString *className) {
+    ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:"), (IMP)AB_NoOp_WithArg);
+    ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:customData:"), (IMP)AB_NoOp_WithArgArg);
+}
+
 #pragma mark - Install
 
 void ABInstallThirdPartyAdHooks(void) {
@@ -117,4 +126,10 @@ void ABInstallThirdPartyAdHooks(void) {
     // SDKバージョンで変わりうるためサフィックス一致で解決する。
     ABSwizzleInstanceMethodBySuffix(@"IMInterstitial", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg);
     ABInstallHideBannerHookBySuffix(@"IMBanner", (IMP)AB_IMBanner_didMoveToWindow, &ABOriginalIMBannerDidMoveToWindowIMP);
+
+    // AdSurgeSDK (AppLovin MAXのカスタムメディエーションネットワーク、Tencent GDTベース)
+    ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeInterstitialAd");
+    ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeRewardedAd");
+    ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeAppOpenAd");
+    ABInstallHideBannerHook(@"AdSurgeBannerAdView", (IMP)AB_AdSurgeBannerAdView_didMoveToWindow, &ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP);
 }

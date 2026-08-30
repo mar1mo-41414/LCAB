@@ -36,6 +36,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | AppLovin MAX | `MAInterstitialAd` / `MARewardedAd` / `MAAppOpenAd` / `MAAdView` | No-ops the show call, hides the banner |
 | Chartboost | `CHBInterstitial` | No-ops the show call |
 | InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
+| AdSurgeSDK (AppLovin MAX custom mediation network, Tencent GDT-based) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
