@@ -37,6 +37,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | Chartboost | `CHBInterstitial` | No-ops the show call |
 | InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
 | AdSurgeSDK (AppLovin MAX custom mediation network, Tencent GDT-based) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | No-ops the show call, hides the banner |
+| Moloco | `PublisherFullscreenAd` (shared Interstitial/Rewarded implementation) / `MolocoBannerAdView` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
@@ -71,13 +72,15 @@ In LiveContainer's per-app tweak settings, add the built `LCAdBlocker.dylib` as 
 
 ## Known limitations
 
-- If the underlying ad SDK (e.g. Unity Ads, MolocoSDK) is implemented in Swift with a
-  protocol-based, non-`@objc` show API, it can't be hooked directly via the Objective-C runtime,
-  so it's out of scope. Objective-C mediation adapters statically linked into the app
-  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi, etc.) are the actual targets.
-  - InMobi is implemented in Swift, but the target classes (`IMInterstitial`/`IMBanner`) are
-    NSObject subclasses bridged to Objective-C, so they're hooked by matching a class-name suffix
-    instead of an exact name (the runtime class name is mangled by SDK version, e.g.
+- If the underlying ad SDK (e.g. Unity Ads) is implemented in Swift, exposes its show API only as
+  a protocol existential, and the concrete implementation class doesn't subclass NSObject (i.e. is
+  never registered with the Objective-C runtime at all), it's out of scope. Objective-C /
+  NSObject-bridged mediation adapters statically linked into the app
+  (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/Moloco, etc.) are the actual targets.
+  - Both InMobi and Moloco are implemented in Swift internally, but their target classes
+    (`IMInterstitial`/`IMBanner`, `PublisherFullscreenAd`/`MolocoBannerAdView`) are NSObject
+    subclasses bridged to Objective-C, so they're hooked by matching a class-name suffix instead
+    of an exact name (the runtime class name is mangled by SDK version, e.g.
     `_TtC9InMobiSDK14IMInterstitial`).
 - Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd`) disable the show call
   entirely, so the reward callback is never invoked either — this avoids creating an exploit

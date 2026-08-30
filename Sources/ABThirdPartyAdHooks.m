@@ -51,6 +51,7 @@ AB_DEFINE_HIDE_BANNER_HOOK(AB_ISBannerView_didMoveToWindow, ABOriginalISBannerVi
 AB_DEFINE_HIDE_BANNER_HOOK(AB_MAAdView_didMoveToWindow, ABOriginalMAAdViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_IMBanner_didMoveToWindow, ABOriginalIMBannerDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_AdSurgeBannerAdView_didMoveToWindow, ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP)
+AB_DEFINE_HIDE_BANNER_HOOK(AB_MolocoBannerAdView_didMoveToWindow, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP)
 
 static void ABInstallHideBannerHook(NSString *className, IMP newImp, IMP *originalImpOut) {
     Class cls = NSClassFromString(className);
@@ -132,4 +133,11 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeRewardedAd");
     ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeAppOpenAd");
     ABInstallHideBannerHook(@"AdSurgeBannerAdView", (IMP)AB_AdSurgeBannerAdView_didMoveToWindow, &ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP);
+
+    // MolocoSDK: インタースティシャル/リワード共用の実体クラスPublisherFullscreenAdは
+    // NSObjectを継承したSwiftクラス。ランタイム上の名前はSDKバージョンで
+    // マングルされうるためサフィックス一致で解決する。
+    ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg);
+    ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:muted:"), (IMP)AB_NoOp_WithArgBool);
+    ABInstallHideBannerHook(@"MolocoBannerAdView", (IMP)AB_MolocoBannerAdView_didMoveToWindow, &ABOriginalMolocoBannerAdViewDidMoveToWindowIMP);
 }
