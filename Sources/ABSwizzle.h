@@ -19,4 +19,11 @@ Class _Nullable ABFindClassBySuffix(NSString *suffix);
 /// ABFindClassBySuffixで見つけたクラスに対してABSwizzleInstanceMethodと同様の差し替えを行う。
 BOOL ABSwizzleInstanceMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp);
 
+/// ABSwizzleInstanceMethodのクラスメソッド版(例: `+[UnityAds show:placementId:options:]`のような
+/// レガシーな静的APIの表示トリガー)。
+BOOL ABSwizzleClassMethod(NSString *className, SEL selector, IMP newImp);
+
+/// ABSwizzleClassMethodのサフィックス一致版。
+BOOL ABSwizzleClassMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp);
+
 NS_ASSUME_NONNULL_END

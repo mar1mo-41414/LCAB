@@ -39,6 +39,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | AdSurgeSDK (AppLovin MAX custom mediation network, Tencent GDT-based) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | No-ops the show call, hides the banner |
 | Moloco | `PublisherFullscreenAd` (shared Interstitial/Rewarded implementation) / `MolocoBannerAdView` | No-ops the show call, hides the banner |
 | Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` | No-ops the show call, hides the banner |
+| Unity Ads itself (legacy static API) | `UnityAds` class methods `show:placementId:options:` / `show:placementId:options:showDelegate:` | No-ops the show call |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present

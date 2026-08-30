@@ -31,6 +31,17 @@ static void AB_NoOp_WithArgBool(id self, SEL _cmd, id arg, BOOL flag) {
     // no-op
 }
 
+/// 3引数(id, id, id)の表示トリガーをno-op化する。
+static void AB_NoOp_WithArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg3) {
+    // no-op
+}
+
+/// 4引数(id, id, id, id)の表示トリガー(レガシーUnityAds.show:placementId:options:showDelegate:等)を
+/// no-op化する。
+static void AB_NoOp_WithArgArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg3, id arg4) {
+    // no-op
+}
+
 #pragma mark - バナー系(表示トリガーがなく、window追加時に自動的に見えるようになるもの)
 
 /// バナーViewをwindowに追加させつつ即座に隠す。didMoveToWindow自体はSDKの内部状態管理を
@@ -149,4 +160,11 @@ void ABInstallThirdPartyAdHooks(void) {
     ABSwizzleInstanceMethod(@"UADSInterstitialAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg);
     ABSwizzleInstanceMethod(@"UADSRewardedAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg);
     ABInstallHideBannerHook(@"UADSBannerView", (IMP)AB_UADSBannerView_didMoveToWindow, &ABOriginalUADSBannerViewDidMoveToWindowIMP);
+
+    // Unity Ads本体のレガシー静的API。`+[UnityAds show:placementId:options:]` /
+    // `+[UnityAds show:placementId:options:showDelegate:]`というクラスメソッド(インスタンスではない)。
+    // UnityAdsクラス自体はSwift実装のためランタイム上の名前がSDKバージョンでマングルされうる
+    // (実測値: `_TtC8UnityAds8UnityAds`)ためサフィックス一致で解決する。
+    ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg);
+    ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg);
 }
