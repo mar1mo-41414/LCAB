@@ -52,7 +52,13 @@ method swizzlingを使っています。LiveContainerのin-process注入環境�
 `__attribute__((constructor))`でdylibロード時に自動的にフックをインストールし、
 `UIApplicationDidFinishLaunchingNotification`後にもう一度同じインストール処理を実行します
 (UnityFrameworkのような追加dylibが、constructor実行時点ではまだロード・クラス登録されていない
-ことがあるため)。
+ことがあるため)。さらに`_dyld_register_func_for_add_image`で、以後にロードされる
+全ての共有ライブラリ/フレームワークに対しても再インストールを試みます。Appodealのような
+メディエーションプラットフォームでは、個々の広告ネットワークSDK(`AppLovinSDK.framework`など)
+がアプリ起動時ではなくメディエーション側の初期化タイミング(Unity C#コード実行後など、
+`didFinishLaunching`よりずっと後)まで実際にロードされないことがあり、前述の2点キャプチャ
+だけでは取りこぼす。`NSClassFromString`ベースのインストール処理は何度実行しても安全なため、
+このコールバックは負荷を気にせず気軽に叩ける。
 
 - `Sources/ABSwizzle.{h,m}`: クラス・セレクタの実行時存在確認付きでIMPを差し替える共通ヘルパー。
   `class_getInstanceMethod`+`method_setImplementation`をそのまま使うと、対象クラス自身が

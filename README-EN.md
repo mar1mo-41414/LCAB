@@ -55,6 +55,13 @@ available, so this follows the same approach as the sister project
 Hooks are installed automatically on dylib load via `__attribute__((constructor))`, and the same
 install pass runs a second time after `UIApplicationDidFinishLaunchingNotification` (an extra
 dylib like UnityFramework may not have loaded/registered its classes yet at constructor time).
+On top of that, `_dyld_register_func_for_add_image` re-runs the install pass for every shared
+library/framework loaded afterward. On mediation platforms like Appodeal, individual ad network
+SDKs (e.g. `AppLovinSDK.framework`) may not actually get loaded at app launch at all — only once
+the mediation layer initializes them, which can happen well after `didFinishLaunching` (e.g. after
+Unity's own C# code starts running) — so the two earlier capture points alone miss them. Since the
+`NSClassFromString`-based install pass is safe to run any number of times, this callback can be
+invoked freely without worrying about overhead.
 
 - `Sources/ABSwizzle.{h,m}`: shared helper that swaps an IMP only after confirming the
   class/selector exist at runtime. Using `class_getInstanceMethod`+`method_setImplementation`

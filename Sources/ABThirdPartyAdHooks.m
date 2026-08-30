@@ -557,6 +557,11 @@ void ABInstallThirdPartyAdHooks(void) {
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:showDelegate:",
                  ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg, kTypesArgArgArgArg));
 
-    // 診断: 広告関連クラスの登録状況をログに残す(dylibロード直後時点のスナップショット)
-    ABLogSuspiciousAdClasses();
+    // 診断: 広告関連クラスの登録状況をログに残す。ABInstallThirdPartyAdHooks自体は
+    // dyldの新規イメージロード通知のたびに何度も呼ばれうる(ABConstructor.m参照)ため、
+    // 全クラスを毎回スキャンするこの処理はdispatch_onceで1回だけに制限する。
+    static dispatch_once_t scanOnceToken;
+    dispatch_once(&scanOnceToken, ^{
+        ABLogSuspiciousAdClasses();
+    });
 }
