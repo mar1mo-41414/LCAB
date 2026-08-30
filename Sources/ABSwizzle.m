@@ -14,17 +14,22 @@ BOOL ABSwizzleInstanceMethod(NSString *className, SEL selector, IMP newImp) {
 }
 
 Class ABFindClassBySuffix(NSString *suffix) {
-    int count = objc_getClassList(NULL, 0);
-    if (count <= 0) {
+    int bufferCount = objc_getClassList(NULL, 0);
+    if (bufferCount <= 0) {
         return nil;
     }
-    Class *classes = (Class *)malloc(sizeof(Class) * (unsigned long)count);
+    Class *classes = (Class *)malloc(sizeof(Class) * (unsigned long)bufferCount);
     if (!classes) {
         return nil;
     }
-    count = objc_getClassList(classes, count);
+    // objc_getClassListの戻り値は「登録されている全クラス数」であり、呼び出し間に
+    // 新しいクラスが増えているとbufferCountより大きくなりうる。それをそのままループ上限に
+    // 使うとmalloc確保分を超えて読み取ってしまう(未定義動作、他クラスの誤検出)ため、
+    // 実際にバッファへ書き込まれた数(=bufferCountとの小さい方)に必ずクランプする。
+    int actualCount = objc_getClassList(classes, bufferCount);
+    int limit = actualCount < bufferCount ? actualCount : bufferCount;
     Class found = nil;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < limit; i++) {
         const char *name = class_getName(classes[i]);
         if (name && [@(name) hasSuffix:suffix]) {
             found = classes[i];

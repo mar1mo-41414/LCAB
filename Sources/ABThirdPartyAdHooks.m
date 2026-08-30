@@ -137,17 +137,19 @@ static void ABInstallAdSurgeFullscreenAdHooks(NSString *className) {
 /// 「クラス名の想定が間違っている」のかを切り分けるための保険。
 static void ABLogSuspiciousAdClasses(void) {
     NSArray<NSString *> *keywords = @[@"Interstitial", @"Rewarded", @"UnityAds", @"UADS", @"Playable"];
-    int count = objc_getClassList(NULL, 0);
-    if (count <= 0) {
+    int bufferCount = objc_getClassList(NULL, 0);
+    if (bufferCount <= 0) {
         return;
     }
-    Class *classes = (Class *)malloc(sizeof(Class) * (unsigned long)count);
+    Class *classes = (Class *)malloc(sizeof(Class) * (unsigned long)bufferCount);
     if (!classes) {
         return;
     }
-    count = objc_getClassList(classes, count);
+    // ABFindClassBySuffixと同じ理由で、実際にバッファへ書き込まれた数にクランプする。
+    int actualCount = objc_getClassList(classes, bufferCount);
+    int limit = actualCount < bufferCount ? actualCount : bufferCount;
     NSMutableArray<NSString *> *matched = [NSMutableArray array];
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < limit; i++) {
         const char *cName = class_getName(classes[i]);
         if (!cName) {
             continue;
