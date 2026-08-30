@@ -69,21 +69,30 @@ static void AB_SKOverlay_presentInScene(id self, SEL _cmd, id scene) {
 #pragma mark - Install
 
 void ABInstallStoreKitHooks(void) {
+    // SKStoreProductViewControllerは通常このセレクタを独自実装しないので、
+    // class_getInstanceMethodはUIViewController(または中間クラス)の実装を返してしまう。
+    // ABSwizzleInstanceMethodはclass_addMethodで対象クラス専用の実装として追加するため、
+    // 継承元(全UIViewControllerのviewDidAppear:)を巻き込まない。
     ABSwizzleInstanceMethod(@"SKStoreProductViewController",
                              @selector(loadProductWithParameters:completionBlock:),
-                             (IMP)AB_loadProductWithParameters_completionBlock);
+                             (IMP)AB_loadProductWithParameters_completionBlock,
+                             "v@:@@?");
 
     ABSwizzleInstanceMethod(@"SKStoreProductViewController",
                              @selector(viewDidAppear:),
-                             (IMP)AB_SKStoreProductViewController_viewDidAppear);
+                             (IMP)AB_SKStoreProductViewController_viewDidAppear,
+                             "v@:B");
 
-    Method presentMethod = class_getInstanceMethod([UIViewController class], @selector(presentViewController:animated:completion:));
-    if (presentMethod) {
-        ABOriginalPresentViewControllerIMP = method_getImplementation(presentMethod);
-        method_setImplementation(presentMethod, (IMP)AB_presentViewController_animated_completion);
-    }
+    // UIViewController自身が対象なので継承元を巻き込む心配はないが、実装を統一するため
+    // 同じ安全なヘルパー経由で差し替える。
+    ABSwizzleInstanceMethodKeepingOriginal([UIViewController class],
+                                            @selector(presentViewController:animated:completion:),
+                                            (IMP)AB_presentViewController_animated_completion,
+                                            "v@:@B@?",
+                                            &ABOriginalPresentViewControllerIMP);
 
     ABSwizzleInstanceMethod(@"SKOverlay",
                              @selector(presentInScene:),
-                             (IMP)AB_SKOverlay_presentInScene);
+                             (IMP)AB_SKOverlay_presentInScene,
+                             "v@:@");
 }

@@ -1,16 +1,26 @@
 #import "ABSwizzle.h"
 
-BOOL ABSwizzleInstanceMethod(NSString *className, SEL selector, IMP newImp) {
-    Class cls = NSClassFromString(className);
+/// class_addMethodで対象クラス自身に新規実装として追加を試み、追加できなければ(=既にそのクラス
+/// 自身がオーバーライド済みなら)method_setImplementationで直接差し替える。cls自体がnilなら失敗。
+static BOOL ABAddOrReplaceInstanceMethod(Class cls, SEL selector, IMP newImp, const char *types) {
     if (!cls) {
         return NO;
     }
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!method) {
+    Method existingMethod = class_getInstanceMethod(cls, selector);
+    if (!existingMethod) {
         return NO;
     }
-    method_setImplementation(method, newImp);
+    BOOL added = class_addMethod(cls, selector, newImp, types);
+    if (!added) {
+        Method ownMethod = class_getInstanceMethod(cls, selector);
+        method_setImplementation(ownMethod, newImp);
+    }
     return YES;
+}
+
+BOOL ABSwizzleInstanceMethod(NSString *className, SEL selector, IMP newImp, const char *types) {
+    Class cls = NSClassFromString(className);
+    return ABAddOrReplaceInstanceMethod(cls, selector, newImp, types);
 }
 
 Class ABFindClassBySuffix(NSString *suffix) {
@@ -40,41 +50,42 @@ Class ABFindClassBySuffix(NSString *suffix) {
     return found;
 }
 
-BOOL ABSwizzleInstanceMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp) {
+BOOL ABSwizzleInstanceMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp, const char *types) {
     Class cls = ABFindClassBySuffix(classNameSuffix);
-    if (!cls) {
-        return NO;
-    }
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!method) {
-        return NO;
-    }
-    method_setImplementation(method, newImp);
-    return YES;
+    return ABAddOrReplaceInstanceMethod(cls, selector, newImp, types);
 }
 
-BOOL ABSwizzleClassMethod(NSString *className, SEL selector, IMP newImp) {
+BOOL ABSwizzleClassMethod(NSString *className, SEL selector, IMP newImp, const char *types) {
     Class cls = NSClassFromString(className);
     if (!cls) {
         return NO;
     }
-    Method method = class_getClassMethod(cls, selector);
-    if (!method) {
-        return NO;
-    }
-    method_setImplementation(method, newImp);
-    return YES;
+    return ABAddOrReplaceInstanceMethod(object_getClass(cls), selector, newImp, types);
 }
 
-BOOL ABSwizzleClassMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp) {
+BOOL ABSwizzleClassMethodBySuffix(NSString *classNameSuffix, SEL selector, IMP newImp, const char *types) {
     Class cls = ABFindClassBySuffix(classNameSuffix);
     if (!cls) {
         return NO;
     }
-    Method method = class_getClassMethod(cls, selector);
-    if (!method) {
+    return ABAddOrReplaceInstanceMethod(object_getClass(cls), selector, newImp, types);
+}
+
+BOOL ABSwizzleInstanceMethodKeepingOriginal(Class cls, SEL selector, IMP newImp, const char *types, IMP *originalImpOut) {
+    if (!cls) {
         return NO;
     }
-    method_setImplementation(method, newImp);
+    Method existingMethod = class_getInstanceMethod(cls, selector);
+    if (!existingMethod) {
+        return NO;
+    }
+    if (originalImpOut) {
+        *originalImpOut = method_getImplementation(existingMethod);
+    }
+    BOOL added = class_addMethod(cls, selector, newImp, types);
+    if (!added) {
+        Method ownMethod = class_getInstanceMethod(cls, selector);
+        method_setImplementation(ownMethod, newImp);
+    }
     return YES;
 }

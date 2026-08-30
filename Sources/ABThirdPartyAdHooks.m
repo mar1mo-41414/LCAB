@@ -4,6 +4,15 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+#pragma mark - Objective-C型エンコーディング(全て "v@:" + 引数の並び。voidメソッドのみ扱う)
+
+static const char *const kTypesVoid = "v@:";
+static const char *const kTypesArg = "v@:@";
+static const char *const kTypesArgArg = "v@:@@";
+static const char *const kTypesArgBool = "v@:@B";
+static const char *const kTypesArgArgArg = "v@:@@@";
+static const char *const kTypesArgArgArgArg = "v@:@@@@";
+
 #pragma mark - 汎用no-op実装
 
 /// 呼ばれたクラス名・セレクタを診断ログに残す。self=インスタンスならそのクラス、
@@ -73,20 +82,16 @@ AB_DEFINE_HIDE_BANNER_HOOK(AB_AdSurgeBannerAdView_didMoveToWindow, ABOriginalAdS
 AB_DEFINE_HIDE_BANNER_HOOK(AB_MolocoBannerAdView_didMoveToWindow, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP)
 AB_DEFINE_HIDE_BANNER_HOOK(AB_UADSBannerView_didMoveToWindow, ABOriginalUADSBannerViewDidMoveToWindowIMP)
 
+/// 対象クラス自身がdidMoveToWindowをオーバーライドしていない場合でも、継承元(UIViewなど)を
+/// 巻き込まずそのクラス専用の実装として安全に差し込む(ABSwizzleInstanceMethodKeepingOriginal参照)。
 static void ABInstallHideBannerHook(NSString *className, IMP newImp, IMP *originalImpOut) {
     Class cls = NSClassFromString(className);
     if (!cls) {
         ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> NG (class not found)", className);
         return;
     }
-    Method method = class_getInstanceMethod(cls, @selector(didMoveToWindow));
-    if (!method) {
-        ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> NG (method not found)", className);
-        return;
-    }
-    *originalImpOut = method_getImplementation(method);
-    method_setImplementation(method, newImp);
-    ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> OK", className);
+    BOOL ok = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), newImp, kTypesVoid, originalImpOut);
+    ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> %@", className, ok ? @"OK" : @"NG (method not found)");
 }
 
 static void ABInstallHideBannerHookBySuffix(NSString *classNameSuffix, IMP newImp, IMP *originalImpOut) {
@@ -95,14 +100,8 @@ static void ABInstallHideBannerHookBySuffix(NSString *classNameSuffix, IMP newIm
         ABDebugLog(@"[INSTALL] *%@.didMoveToWindow -> NG (class not found)", classNameSuffix);
         return;
     }
-    Method method = class_getInstanceMethod(cls, @selector(didMoveToWindow));
-    if (!method) {
-        ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> NG (method not found)", NSStringFromClass(cls));
-        return;
-    }
-    *originalImpOut = method_getImplementation(method);
-    method_setImplementation(method, newImp);
-    ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> OK (matched *%@)", NSStringFromClass(cls), classNameSuffix);
+    BOOL ok = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), newImp, kTypesVoid, originalImpOut);
+    ABDebugLog(@"[INSTALL] %@.didMoveToWindow -> %@ (matched *%@)", NSStringFromClass(cls), ok ? @"OK" : @"NG (method not found)", classNameSuffix);
 }
 
 static void ABLogSwizzle(NSString *label, BOOL ok) {
@@ -113,11 +112,11 @@ static void ABLogSwizzle(NSString *label, BOOL ok) {
 
 static void ABInstallMAXFullscreenAdHooks(NSString *className) {
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAd", className],
-                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAd"), (IMP)AB_NoOp_Void));
+                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAd"), (IMP)AB_NoOp_Void, kTypesVoid));
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAdForPlacement:", className],
-                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdForPlacement:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdForPlacement:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAdForPlacement:customData:", className],
-                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdForPlacement:customData:"), (IMP)AB_NoOp_WithArgArg));
+                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdForPlacement:customData:"), (IMP)AB_NoOp_WithArgArg, kTypesArgArg));
 }
 
 #pragma mark - AdSurgeSDK (AppLovin MAXのカスタムメディエーションアダプタ経由、Tencent GDTベース。
@@ -125,9 +124,9 @@ static void ABInstallMAXFullscreenAdHooks(NSString *className) {
 
 static void ABInstallAdSurgeFullscreenAdHooks(NSString *className) {
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAdFromRootViewController:", className],
-                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAdFromRootViewController:customData:", className],
-                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:customData:"), (IMP)AB_NoOp_WithArgArg));
+                 ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:customData:"), (IMP)AB_NoOp_WithArgArg, kTypesArgArg));
 }
 
 #pragma mark - 診断: ロード済みの広告関連クラスを洗い出す
@@ -174,18 +173,18 @@ static void ABLogSuspiciousAdClasses(void) {
 void ABInstallThirdPartyAdHooks(void) {
     // Google AdMob
     ABLogSwizzle(@"GADInterstitialAd.presentFromRootViewController:",
-                 ABSwizzleInstanceMethod(@"GADInterstitialAd", @selector(presentFromRootViewController:), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(@"GADInterstitialAd", @selector(presentFromRootViewController:), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle(@"GADRewardedAd.presentFromRootViewController:userDidEarnRewardHandler:",
-                 ABSwizzleInstanceMethod(@"GADRewardedAd", @selector(presentFromRootViewController:userDidEarnRewardHandler:), (IMP)AB_NoOp_WithArgAndBlock));
+                 ABSwizzleInstanceMethod(@"GADRewardedAd", @selector(presentFromRootViewController:userDidEarnRewardHandler:), (IMP)AB_NoOp_WithArgAndBlock, kTypesArgArg));
     ABInstallHideBannerHook(@"GADBannerView", (IMP)AB_GADBannerView_didMoveToWindow, &ABOriginalGADBannerViewDidMoveToWindowIMP);
 
     // Meta Audience Network
     ABLogSwizzle(@"FBInterstitialAd.showAdFromRootViewController:",
-                 ABSwizzleInstanceMethod(@"FBInterstitialAd", @selector(showAdFromRootViewController:), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(@"FBInterstitialAd", @selector(showAdFromRootViewController:), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle(@"FBRewardedVideoAd.showAdFromRootViewController:",
-                 ABSwizzleInstanceMethod(@"FBRewardedVideoAd", NSSelectorFromString(@"showAdFromRootViewController:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(@"FBRewardedVideoAd", NSSelectorFromString(@"showAdFromRootViewController:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle(@"FBRewardedVideoAd.showAdFromRootViewController:animated:",
-                 ABSwizzleInstanceMethod(@"FBRewardedVideoAd", NSSelectorFromString(@"showAdFromRootViewController:animated:"), (IMP)AB_NoOp_WithArgBool));
+                 ABSwizzleInstanceMethod(@"FBRewardedVideoAd", NSSelectorFromString(@"showAdFromRootViewController:animated:"), (IMP)AB_NoOp_WithArgBool, kTypesArgBool));
     ABInstallHideBannerHook(@"FBAdView", (IMP)AB_FBAdView_didMoveToWindow, &ABOriginalFBAdViewDidMoveToWindowIMP);
 
     // ironSource
@@ -199,15 +198,15 @@ void ABInstallThirdPartyAdHooks(void) {
 
     // Chartboost
     ABLogSwizzle(@"CHBInterstitial.showFromViewController:",
-                 ABSwizzleInstanceMethod(@"CHBInterstitial", NSSelectorFromString(@"showFromViewController:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethod(@"CHBInterstitial", NSSelectorFromString(@"showFromViewController:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle(@"CHBInterstitial.show",
-                 ABSwizzleInstanceMethod(@"CHBInterstitial", NSSelectorFromString(@"show"), (IMP)AB_NoOp_Void));
+                 ABSwizzleInstanceMethod(@"CHBInterstitial", NSSelectorFromString(@"show"), (IMP)AB_NoOp_Void, kTypesVoid));
 
     // InMobi: Swift実装のためObjective-Cランタイム上のクラス名は
     // `_TtC9InMobiSDK14IMInterstitial`のようにモジュール名を含む形にマングルされ、
     // SDKバージョンで変わりうるためサフィックス一致で解決する。
     ABLogSwizzle(@"*IMInterstitial.showFrom:",
-                 ABSwizzleInstanceMethodBySuffix(@"IMInterstitial", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethodBySuffix(@"IMInterstitial", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABInstallHideBannerHookBySuffix(@"IMBanner", (IMP)AB_IMBanner_didMoveToWindow, &ABOriginalIMBannerDidMoveToWindowIMP);
 
     // AdSurgeSDK (AppLovin MAXのカスタムメディエーションネットワーク、Tencent GDTベース)
@@ -220,18 +219,18 @@ void ABInstallThirdPartyAdHooks(void) {
     // NSObjectを継承したSwiftクラス。ランタイム上の名前はSDKバージョンで
     // マングルされうるためサフィックス一致で解決する。
     ABLogSwizzle(@"*PublisherFullscreenAd.showFrom:",
-                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg));
+                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:"), (IMP)AB_NoOp_WithArg, kTypesArg));
     ABLogSwizzle(@"*PublisherFullscreenAd.showFrom:muted:",
-                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:muted:"), (IMP)AB_NoOp_WithArgBool));
+                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:muted:"), (IMP)AB_NoOp_WithArgBool, kTypesArgBool));
     ABInstallHideBannerHook(@"MolocoBannerAdView", (IMP)AB_MolocoBannerAdView_didMoveToWindow, &ABOriginalMolocoBannerAdViewDidMoveToWindowIMP);
 
     // Unity Ads本体(SDK 4.x系の新API)。UADSInterstitialAd/UADSRewardedAd/UADSBannerViewは
     // "UADS"プレフィックスでObjective-Cブリッジされたクラスで、実際の表示エントリポイント。
     // AppLovin MAXのALUnityAdsMediationAdapter経由でも、結局この2クラスのshow:delegate:が呼ばれる。
     ABLogSwizzle(@"UADSInterstitialAd.show:delegate:",
-                 ABSwizzleInstanceMethod(@"UADSInterstitialAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg));
+                 ABSwizzleInstanceMethod(@"UADSInterstitialAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg, kTypesArgArg));
     ABLogSwizzle(@"UADSRewardedAd.show:delegate:",
-                 ABSwizzleInstanceMethod(@"UADSRewardedAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg));
+                 ABSwizzleInstanceMethod(@"UADSRewardedAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg, kTypesArgArg));
     ABInstallHideBannerHook(@"UADSBannerView", (IMP)AB_UADSBannerView_didMoveToWindow, &ABOriginalUADSBannerViewDidMoveToWindowIMP);
 
     // Unity Ads本体のレガシー静的API。`+[UnityAds show:placementId:options:]` /
@@ -239,9 +238,9 @@ void ABInstallThirdPartyAdHooks(void) {
     // UnityAdsクラス自体はSwift実装のためランタイム上の名前がSDKバージョンでマングルされうる
     // (実測値: `_TtC8UnityAds8UnityAds`)ためサフィックス一致で解決する。
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:",
-                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg));
+                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg, kTypesArgArgArg));
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:showDelegate:",
-                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg));
+                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg, kTypesArgArgArgArg));
 
     // 診断: 広告関連クラスの登録状況をログに残す(dylibロード直後時点のスナップショット)
     ABLogSuspiciousAdClasses();
