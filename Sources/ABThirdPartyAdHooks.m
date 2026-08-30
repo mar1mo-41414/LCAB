@@ -53,25 +53,38 @@ static void AB_NoOp_WithArgArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg
 #pragma mark   報酬は成功扱いにする(不正な第三者への報酬付与ではなく、自分自身の環境のみに閉じる)。
 
 /// self.delegateを安全に取得する(delegateの型はSDKごとに異なるため素朴にrespondsToSelector:で
-/// チェックしてから呼ぶ)。
+/// チェックしてから呼ぶ)。取得の成否・delegateの実クラス名を診断ログに残す。
 static id ABGetDelegate(id self) {
     if (![self respondsToSelector:@selector(delegate)]) {
+        ABDebugLog(@"[REWARD]   %@ has no -delegate accessor", NSStringFromClass([self class]));
         return nil;
     }
-    return ((id (*)(id, SEL))objc_msgSend)(self, @selector(delegate));
+    id delegate = ((id (*)(id, SEL))objc_msgSend)(self, @selector(delegate));
+    ABDebugLog(@"[REWARD]   %@.delegate = %@", NSStringFromClass([self class]), delegate ? NSStringFromClass([delegate class]) : @"nil");
+    return delegate;
 }
 
 /// 1引数のdelegateコールバックを、存在すれば呼ぶ。引数はnil(Objective-Cのnilへのメッセージ送信は
 /// プロパティアクセス程度なら安全にゼロ値を返すため、型不一致のオブジェクトを渡うより安全)。
 static void ABCallDelegate1(id delegate, SEL sel, id arg) {
-    if (delegate && [delegate respondsToSelector:sel]) {
+    if (!delegate) {
+        return;
+    }
+    BOOL responds = [delegate respondsToSelector:sel];
+    ABDebugLog(@"[REWARD]   %@ respondsTo %@ -> %@", NSStringFromClass([delegate class]), NSStringFromSelector(sel), responds ? @"YES, calling" : @"NO");
+    if (responds) {
         ((void (*)(id, SEL, id))objc_msgSend)(delegate, sel, arg);
     }
 }
 
 /// 2引数のdelegateコールバックを、存在すれば呼ぶ。
 static void ABCallDelegate2(id delegate, SEL sel, id arg1, id arg2) {
-    if (delegate && [delegate respondsToSelector:sel]) {
+    if (!delegate) {
+        return;
+    }
+    BOOL responds = [delegate respondsToSelector:sel];
+    ABDebugLog(@"[REWARD]   %@ respondsTo %@ -> %@", NSStringFromClass([delegate class]), NSStringFromSelector(sel), responds ? @"YES, calling" : @"NO");
+    if (responds) {
         ((void (*)(id, SEL, id, id))objc_msgSend)(delegate, sel, arg1, arg2);
     }
 }
@@ -156,6 +169,9 @@ static void ABNotifyMolocoDelegate(id self) {
     if ([self respondsToSelector:@selector(interstitialDelegate)]) {
         interstitialDelegate = ((id (*)(id, SEL))objc_msgSend)(self, @selector(interstitialDelegate));
     }
+    ABDebugLog(@"[REWARD]   Moloco rewardedDelegate=%@ interstitialDelegate=%@",
+               rewardedDelegate ? NSStringFromClass([rewardedDelegate class]) : @"nil",
+               interstitialDelegate ? NSStringFromClass([interstitialDelegate class]) : @"nil");
     ABCallDelegate1(rewardedDelegate, NSSelectorFromString(@"didRewardUser:"), nil);
     ABCallDelegate1(rewardedDelegate, NSSelectorFromString(@"didHide:"), nil);
     ABCallDelegate1(interstitialDelegate, NSSelectorFromString(@"didHide:"), nil);
