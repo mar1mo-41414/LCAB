@@ -1,0 +1,7 @@
+.theos/
+packages/
+*.dylib
+*.dSYM/
+.DS_Store
+start-note.md
+research/
