@@ -95,6 +95,14 @@ method swizzlingを使っています。LiveContainerのin-process注入環境�
 SDK側がframeを書き戻す→……」という循環でメインスレッドがフリーズしたため撤廃した。
 `hidden`の強制だけで画面上には表示されなくなるので、`frame`はSDK/Auto Layoutの管理に委ねている。
 
+`didMoveToWindow`+`setHidden:`の2点でもまだ不十分なケースを確認した。`MAAdView`は
+`setAlpha:`を独自オーバーライドしており、自動リフレッシュ時に`alpha`を明示的に1.0へ
+書き戻すコードが副作用として`hidden`も`NO`に戻していたと見られ、バナーが消えないまま
+だった。`setAlpha:`も乗っ取り、渡された値に関わらず常に0を強制しつつ`hidden`も
+再度強制することで解決した(StoneGrassの`MAAdView`で確認)。同種の問題は他のSDKでも
+起こりうるため、バナー系フックは全SDK共通で
+`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`の4点セットにしている。
+
 ### リワード広告の報酬付与とMAAdのキャプチャ
 
 リワード広告のshowをブロックした後、広告を見た体でSDK側のdelegateに成功を通知することで

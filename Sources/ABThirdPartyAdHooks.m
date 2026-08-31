@@ -14,6 +14,7 @@ static const char *const kTypesArgBool = "v@:@B";
 static const char *const kTypesArgArgArg = "v@:@@@";
 static const char *const kTypesArgArgArgArg = "v@:@@@@";
 static const char *const kTypesBool = "v@:B";
+static const char *const kTypesDouble = "v@:d"; // CGFloatはarm64ではdouble(64bit)
 
 /// 同じ内容のインストールログを繰り返し出さないようにする。dyldの新規イメージロードのたびに
 /// インストール処理全体が再実行される(ABConstructor.m参照)ため、素朴に毎回ログを出すと
@@ -347,16 +348,22 @@ static void AB_Smaato_showFromViewController_Reward(id self, SEL _cmd, id vc) {
 /// (InMobiのIMBannerで確認)ではframe変更→制約違反→再レイアウト要求→layoutSubviews再呼び出し→
 /// SDK側がframeを書き戻す→……という循環でメインスレッドがフリーズしたため廃止した。
 /// hiddenだけで画面上には表示されなくなるので、frameはSDK/Auto Layoutの管理に委ねる。
+///
+/// MAAdViewはsetAlpha:を独自オーバーライドしており(自動リフレッシュ時にalphaを明示的に
+/// 1.0へ戻すコードが、副作用としてhiddenも書き戻していると推測される)、setHidden:だけでは
+/// 不十分でバナーが消えないケースを実際に確認した。setAlpha:も乗っ取り、渡された値に関わらず
+/// 常に0を強制しつつ、その直後にhiddenも再度強制する。
 static void ABForceHidden(UIView *view) {
     if (!view.hidden) {
         view.hidden = YES;
     }
 }
 
-#define AB_DEFINE_HIDE_BANNER_HOOK_SET(prefix, didMoveVar, setHiddenVar, layoutVar) \
+#define AB_DEFINE_HIDE_BANNER_HOOK_SET(prefix, didMoveVar, setHiddenVar, layoutVar, setAlphaVar) \
     static IMP didMoveVar = NULL; \
     static IMP setHiddenVar = NULL; \
     static IMP layoutVar = NULL; \
+    static IMP setAlphaVar = NULL; \
     static void prefix##_didMoveToWindow(UIView *self, SEL _cmd) { \
         ABLogBlocked(self, _cmd); \
         if (didMoveVar) { \
@@ -374,18 +381,24 @@ static void ABForceHidden(UIView *view) {
             ((void (*)(id, SEL))layoutVar)(self, _cmd); \
         } \
         ABForceHidden(self); \
+    } \
+    static void prefix##_setAlpha(UIView *self, SEL _cmd, CGFloat alpha) { \
+        if (setAlphaVar) { \
+            ((void (*)(id, SEL, CGFloat))setAlphaVar)(self, _cmd, 0.0); \
+        } \
+        ABForceHidden(self); \
     }
 
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_GADBannerView, ABOriginalGADBannerViewDidMoveToWindowIMP, ABOriginalGADBannerViewSetHiddenIMP, ABOriginalGADBannerViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_FBAdView, ABOriginalFBAdViewDidMoveToWindowIMP, ABOriginalFBAdViewSetHiddenIMP, ABOriginalFBAdViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_ISBannerView, ABOriginalISBannerViewDidMoveToWindowIMP, ABOriginalISBannerViewSetHiddenIMP, ABOriginalISBannerViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MAAdView, ABOriginalMAAdViewDidMoveToWindowIMP, ABOriginalMAAdViewSetHiddenIMP, ABOriginalMAAdViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_IMBanner, ABOriginalIMBannerDidMoveToWindowIMP, ABOriginalIMBannerSetHiddenIMP, ABOriginalIMBannerLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_AdSurgeBannerAdView, ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP, ABOriginalAdSurgeBannerAdViewSetHiddenIMP, ABOriginalAdSurgeBannerAdViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MolocoBannerAdView, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP, ABOriginalMolocoBannerAdViewSetHiddenIMP, ABOriginalMolocoBannerAdViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerView, ABOriginalUADSBannerViewDidMoveToWindowIMP, ABOriginalUADSBannerViewSetHiddenIMP, ABOriginalUADSBannerViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerWrapperView, ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP, ABOriginalUADSBannerWrapperViewSetHiddenIMP, ABOriginalUADSBannerWrapperViewLayoutSubviewsIMP)
-AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_SMABannerView, ABOriginalSMABannerViewDidMoveToWindowIMP, ABOriginalSMABannerViewSetHiddenIMP, ABOriginalSMABannerViewLayoutSubviewsIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_GADBannerView, ABOriginalGADBannerViewDidMoveToWindowIMP, ABOriginalGADBannerViewSetHiddenIMP, ABOriginalGADBannerViewLayoutSubviewsIMP, ABOriginalGADBannerViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_FBAdView, ABOriginalFBAdViewDidMoveToWindowIMP, ABOriginalFBAdViewSetHiddenIMP, ABOriginalFBAdViewLayoutSubviewsIMP, ABOriginalFBAdViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_ISBannerView, ABOriginalISBannerViewDidMoveToWindowIMP, ABOriginalISBannerViewSetHiddenIMP, ABOriginalISBannerViewLayoutSubviewsIMP, ABOriginalISBannerViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MAAdView, ABOriginalMAAdViewDidMoveToWindowIMP, ABOriginalMAAdViewSetHiddenIMP, ABOriginalMAAdViewLayoutSubviewsIMP, ABOriginalMAAdViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_IMBanner, ABOriginalIMBannerDidMoveToWindowIMP, ABOriginalIMBannerSetHiddenIMP, ABOriginalIMBannerLayoutSubviewsIMP, ABOriginalIMBannerSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_AdSurgeBannerAdView, ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP, ABOriginalAdSurgeBannerAdViewSetHiddenIMP, ABOriginalAdSurgeBannerAdViewLayoutSubviewsIMP, ABOriginalAdSurgeBannerAdViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MolocoBannerAdView, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP, ABOriginalMolocoBannerAdViewSetHiddenIMP, ABOriginalMolocoBannerAdViewLayoutSubviewsIMP, ABOriginalMolocoBannerAdViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerView, ABOriginalUADSBannerViewDidMoveToWindowIMP, ABOriginalUADSBannerViewSetHiddenIMP, ABOriginalUADSBannerViewLayoutSubviewsIMP, ABOriginalUADSBannerViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerWrapperView, ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP, ABOriginalUADSBannerWrapperViewSetHiddenIMP, ABOriginalUADSBannerWrapperViewLayoutSubviewsIMP, ABOriginalUADSBannerWrapperViewSetAlphaIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_SMABannerView, ABOriginalSMABannerViewDidMoveToWindowIMP, ABOriginalSMABannerViewSetHiddenIMP, ABOriginalSMABannerViewLayoutSubviewsIMP, ABOriginalSMABannerViewSetAlphaIMP)
 
 /// 対象クラス自身がメソッドをオーバーライドしていない場合でも、継承元(UIViewなど)を
 /// 巻き込まずそのクラス専用の実装として安全に差し込む(ABSwizzleInstanceMethodKeepingOriginal参照)。
@@ -393,7 +406,8 @@ AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_SMABannerView, ABOriginalSMABannerViewDidMoveT
 static void ABInstallHideBannerHookSet(NSString *className,
                                         IMP didMoveImp, IMP *didMoveOriginal,
                                         IMP setHiddenImp, IMP *setHiddenOriginal,
-                                        IMP layoutImp, IMP *layoutOriginal) {
+                                        IMP layoutImp, IMP *layoutOriginal,
+                                        IMP setAlphaImp, IMP *setAlphaOriginal) {
     Class cls = NSClassFromString(className);
     if (!cls) {
         if (ABShouldLogInstallResult(className, NO)) {
@@ -404,17 +418,19 @@ static void ABInstallHideBannerHookSet(NSString *className,
     BOOL ok1 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), didMoveImp, kTypesVoid, didMoveOriginal);
     BOOL ok2 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setHidden:), setHiddenImp, kTypesBool, setHiddenOriginal);
     BOOL ok3 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(layoutSubviews), layoutImp, kTypesVoid, layoutOriginal);
-    BOOL allOk = ok1 && ok2 && ok3;
+    BOOL ok4 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setAlpha:), setAlphaImp, kTypesDouble, setAlphaOriginal);
+    BOOL allOk = ok1 && ok2 && ok3 && ok4;
     if (ABShouldLogInstallResult(className, allOk)) {
-        ABDebugLog(@"[INSTALL] %@ didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", className,
-                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+        ABDebugLog(@"[INSTALL] %@ didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@ setAlpha:=%@", className,
+                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG", ok4 ? @"OK" : @"NG");
     }
 }
 
 static void ABInstallHideBannerHookSetBySuffix(NSString *classNameSuffix,
                                                 IMP didMoveImp, IMP *didMoveOriginal,
                                                 IMP setHiddenImp, IMP *setHiddenOriginal,
-                                                IMP layoutImp, IMP *layoutOriginal) {
+                                                IMP layoutImp, IMP *layoutOriginal,
+                                                IMP setAlphaImp, IMP *setAlphaOriginal) {
     Class cls = ABFindClassBySuffix(classNameSuffix);
     if (!cls) {
         if (ABShouldLogInstallResult(classNameSuffix, NO)) {
@@ -425,10 +441,11 @@ static void ABInstallHideBannerHookSetBySuffix(NSString *classNameSuffix,
     BOOL ok1 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(didMoveToWindow), didMoveImp, kTypesVoid, didMoveOriginal);
     BOOL ok2 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setHidden:), setHiddenImp, kTypesBool, setHiddenOriginal);
     BOOL ok3 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(layoutSubviews), layoutImp, kTypesVoid, layoutOriginal);
-    BOOL allOk = ok1 && ok2 && ok3;
+    BOOL ok4 = ABSwizzleInstanceMethodKeepingOriginal(cls, @selector(setAlpha:), setAlphaImp, kTypesDouble, setAlphaOriginal);
+    BOOL allOk = ok1 && ok2 && ok3 && ok4;
     if (ABShouldLogInstallResult(classNameSuffix, allOk)) {
-        ABDebugLog(@"[INSTALL] %@ (matched *%@) didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@", NSStringFromClass(cls), classNameSuffix,
-                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG");
+        ABDebugLog(@"[INSTALL] %@ (matched *%@) didMoveToWindow=%@ setHidden:=%@ layoutSubviews=%@ setAlpha:=%@", NSStringFromClass(cls), classNameSuffix,
+                   ok1 ? @"OK" : @"NG", ok2 ? @"OK" : @"NG", ok3 ? @"OK" : @"NG", ok4 ? @"OK" : @"NG");
     }
 }
 
@@ -514,7 +531,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"GADBannerView",
                                (IMP)AB_GADBannerView_didMoveToWindow, &ABOriginalGADBannerViewDidMoveToWindowIMP,
                                (IMP)AB_GADBannerView_setHidden, &ABOriginalGADBannerViewSetHiddenIMP,
-                               (IMP)AB_GADBannerView_layoutSubviews, &ABOriginalGADBannerViewLayoutSubviewsIMP);
+                               (IMP)AB_GADBannerView_layoutSubviews, &ABOriginalGADBannerViewLayoutSubviewsIMP,
+                               (IMP)AB_GADBannerView_setAlpha, &ABOriginalGADBannerViewSetAlphaIMP);
 
     // Meta Audience Network
     ABLogSwizzle(@"FBInterstitialAd.showAdFromRootViewController:",
@@ -526,13 +544,15 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"FBAdView",
                                (IMP)AB_FBAdView_didMoveToWindow, &ABOriginalFBAdViewDidMoveToWindowIMP,
                                (IMP)AB_FBAdView_setHidden, &ABOriginalFBAdViewSetHiddenIMP,
-                               (IMP)AB_FBAdView_layoutSubviews, &ABOriginalFBAdViewLayoutSubviewsIMP);
+                               (IMP)AB_FBAdView_layoutSubviews, &ABOriginalFBAdViewLayoutSubviewsIMP,
+                               (IMP)AB_FBAdView_setAlpha, &ABOriginalFBAdViewSetAlphaIMP);
 
     // ironSource
     ABInstallHideBannerHookSet(@"ISBannerView",
                                (IMP)AB_ISBannerView_didMoveToWindow, &ABOriginalISBannerViewDidMoveToWindowIMP,
                                (IMP)AB_ISBannerView_setHidden, &ABOriginalISBannerViewSetHiddenIMP,
-                               (IMP)AB_ISBannerView_layoutSubviews, &ABOriginalISBannerViewLayoutSubviewsIMP);
+                               (IMP)AB_ISBannerView_layoutSubviews, &ABOriginalISBannerViewLayoutSubviewsIMP,
+                               (IMP)AB_ISBannerView_setAlpha, &ABOriginalISBannerViewSetAlphaIMP);
 
     // AppLovin MAX: インタースティシャル・リワード・アプリ起動時オープン広告は同じshow系APIを共有
     ABInstallMAXFullscreenAdHooks(@"MAInterstitialAd", NO);
@@ -541,7 +561,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"MAAdView",
                                (IMP)AB_MAAdView_didMoveToWindow, &ABOriginalMAAdViewDidMoveToWindowIMP,
                                (IMP)AB_MAAdView_setHidden, &ABOriginalMAAdViewSetHiddenIMP,
-                               (IMP)AB_MAAdView_layoutSubviews, &ABOriginalMAAdViewLayoutSubviewsIMP);
+                               (IMP)AB_MAAdView_layoutSubviews, &ABOriginalMAAdViewLayoutSubviewsIMP,
+                               (IMP)AB_MAAdView_setAlpha, &ABOriginalMAAdViewSetAlphaIMP);
     // Unity統合ではMAUnityAdManagerがロード済み広告のMAAdインスタンスを保持しているため、
     // その受け渡し口(didLoadAd:)を横取りしてキャプチャしておく(ABNotifyMAXDelegateが使う)。
     ABInstallMAUnityAdManagerCaptureHook();
@@ -560,7 +581,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSetBySuffix(@"IMBanner",
                                        (IMP)AB_IMBanner_didMoveToWindow, &ABOriginalIMBannerDidMoveToWindowIMP,
                                        (IMP)AB_IMBanner_setHidden, &ABOriginalIMBannerSetHiddenIMP,
-                                       (IMP)AB_IMBanner_layoutSubviews, &ABOriginalIMBannerLayoutSubviewsIMP);
+                                       (IMP)AB_IMBanner_layoutSubviews, &ABOriginalIMBannerLayoutSubviewsIMP,
+                                       (IMP)AB_IMBanner_setAlpha, &ABOriginalIMBannerSetAlphaIMP);
 
     // AdSurgeSDK (AppLovin MAXのカスタムメディエーションネットワーク、Tencent GDTベース)
     ABInstallAdSurgeFullscreenAdHooks(@"AdSurgeInterstitialAd", NO);
@@ -569,7 +591,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"AdSurgeBannerAdView",
                                (IMP)AB_AdSurgeBannerAdView_didMoveToWindow, &ABOriginalAdSurgeBannerAdViewDidMoveToWindowIMP,
                                (IMP)AB_AdSurgeBannerAdView_setHidden, &ABOriginalAdSurgeBannerAdViewSetHiddenIMP,
-                               (IMP)AB_AdSurgeBannerAdView_layoutSubviews, &ABOriginalAdSurgeBannerAdViewLayoutSubviewsIMP);
+                               (IMP)AB_AdSurgeBannerAdView_layoutSubviews, &ABOriginalAdSurgeBannerAdViewLayoutSubviewsIMP,
+                               (IMP)AB_AdSurgeBannerAdView_setAlpha, &ABOriginalAdSurgeBannerAdViewSetAlphaIMP);
 
     // MolocoSDK: インタースティシャル/リワード共用の実体クラスPublisherFullscreenAdは
     // NSObjectを継承したSwiftクラス。ランタイム上の名前はSDKバージョンで
@@ -581,7 +604,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"MolocoBannerAdView",
                                (IMP)AB_MolocoBannerAdView_didMoveToWindow, &ABOriginalMolocoBannerAdViewDidMoveToWindowIMP,
                                (IMP)AB_MolocoBannerAdView_setHidden, &ABOriginalMolocoBannerAdViewSetHiddenIMP,
-                               (IMP)AB_MolocoBannerAdView_layoutSubviews, &ABOriginalMolocoBannerAdViewLayoutSubviewsIMP);
+                               (IMP)AB_MolocoBannerAdView_layoutSubviews, &ABOriginalMolocoBannerAdViewLayoutSubviewsIMP,
+                               (IMP)AB_MolocoBannerAdView_setAlpha, &ABOriginalMolocoBannerAdViewSetAlphaIMP);
 
     // Unity Ads本体(SDK 4.x系の新API)。UADSInterstitialAd/UADSRewardedAd/UADSBannerViewは
     // "UADS"プレフィックスでObjective-Cブリッジされたクラスで、実際の表示エントリポイント。
@@ -593,12 +617,14 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"UADSBannerView",
                                (IMP)AB_UADSBannerView_didMoveToWindow, &ABOriginalUADSBannerViewDidMoveToWindowIMP,
                                (IMP)AB_UADSBannerView_setHidden, &ABOriginalUADSBannerViewSetHiddenIMP,
-                               (IMP)AB_UADSBannerView_layoutSubviews, &ABOriginalUADSBannerViewLayoutSubviewsIMP);
+                               (IMP)AB_UADSBannerView_layoutSubviews, &ABOriginalUADSBannerViewLayoutSubviewsIMP,
+                               (IMP)AB_UADSBannerView_setAlpha, &ABOriginalUADSBannerViewSetAlphaIMP);
     // UADSBannerViewを包む中間View(SDKバージョンによって存在)。バナー自体を隠す保険として両方叩く。
     ABInstallHideBannerHookSet(@"UADSBannerWrapperView",
                                (IMP)AB_UADSBannerWrapperView_didMoveToWindow, &ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP,
                                (IMP)AB_UADSBannerWrapperView_setHidden, &ABOriginalUADSBannerWrapperViewSetHiddenIMP,
-                               (IMP)AB_UADSBannerWrapperView_layoutSubviews, &ABOriginalUADSBannerWrapperViewLayoutSubviewsIMP);
+                               (IMP)AB_UADSBannerWrapperView_layoutSubviews, &ABOriginalUADSBannerWrapperViewLayoutSubviewsIMP,
+                               (IMP)AB_UADSBannerWrapperView_setAlpha, &ABOriginalUADSBannerWrapperViewSetAlphaIMP);
     // UADSBannerAdはロード管理を担うクラスで、displayBannerが実際の表示トリガー。
     ABLogSwizzle(@"UADSBannerAd.displayBanner",
                  ABSwizzleInstanceMethod(@"UADSBannerAd", NSSelectorFromString(@"displayBanner"), (IMP)AB_NoOp_Void, kTypesVoid));
@@ -620,7 +646,8 @@ void ABInstallThirdPartyAdHooks(void) {
     ABInstallHideBannerHookSet(@"SMABannerView",
                                (IMP)AB_SMABannerView_didMoveToWindow, &ABOriginalSMABannerViewDidMoveToWindowIMP,
                                (IMP)AB_SMABannerView_setHidden, &ABOriginalSMABannerViewSetHiddenIMP,
-                               (IMP)AB_SMABannerView_layoutSubviews, &ABOriginalSMABannerViewLayoutSubviewsIMP);
+                               (IMP)AB_SMABannerView_layoutSubviews, &ABOriginalSMABannerViewLayoutSubviewsIMP,
+                               (IMP)AB_SMABannerView_setAlpha, &ABOriginalSMABannerViewSetAlphaIMP);
 
     // 診断: 広告関連クラスの登録状況をログに残す。ABInstallThirdPartyAdHooks自体は
     // dyldの新規イメージロード通知のたびに何度も呼ばれうる(ABConstructor.m参照)ため、

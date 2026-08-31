@@ -99,6 +99,14 @@ violation → re-layout request → `layoutSubviews` fires again → the SDK wri
 … — the main thread got stuck in this cycle. Forcing `hidden` alone is enough to make the view
 invisible, so `frame` is now left to the SDK/Auto Layout.
 
+Even `didMoveToWindow` + `setHidden:` turned out insufficient in one case: `MAAdView` overrides
+`setAlpha:`, and its auto-refresh logic appears to explicitly reset `alpha` back to 1.0 — with the
+side effect of also resetting `hidden` back to `NO` — so the banner stayed visible. Hijacking
+`setAlpha:` as well (forcing 0 regardless of the value passed in, then re-forcing `hidden`) fixed
+it (confirmed with `MAAdView` in StoneGrass). Since the same kind of issue could show up in other
+SDKs too, every banner hook now uses a common four-method set:
+`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`.
+
 ### Reward granting and capturing a real MAAd
 
 After blocking a rewarded ad's show call, the SDK's delegate is notified of success as if the ad
