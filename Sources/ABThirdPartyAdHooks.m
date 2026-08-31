@@ -393,6 +393,13 @@ static void ABForceHiddenRecursive(UIView *view) {
             ((void (*)(id, SEL))didMoveVar)(self, _cmd); \
         } \
         ABForceHiddenRecursive(self); \
+        /* hidden=YES/layer.opacity=0まで再帰的に強制してもUnity統合特有の描画パスでは */ \
+        /* まだ画面に見え続けるケースを実際に確認した(StoneGrassのMAAdView)。最終手段として */ \
+        /* View階層そのものから切り離す。子孫ではなくこのバナーコンテナ自身のみ親から外す */ \
+        /* (子孫を外すとSDK内部の参照が壊れてクラッシュしうるため対象を最小限にする)。 */ \
+        if (self.superview) { \
+            [self removeFromSuperview]; \
+        } \
     } \
     static void prefix##_setHidden(UIView *self, SEL _cmd, BOOL hidden) { \
         ABDebugLog(@"[BLOCKED] %@ setHidden:%@", NSStringFromClass([self class]), hidden ? @"YES" : @"NO"); \
