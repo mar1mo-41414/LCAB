@@ -487,16 +487,21 @@ static void ABInstallAdSurgeFullscreenAdHooks(NSString *className, BOOL grantRew
 #pragma mark   非表示化フックが本当に対象クラスを捉えているのか、それとも全く別のクラスが
 #pragma mark   表示の実体なのかを直接特定するための最終手段。
 
-static void ABDumpViewIfBottomVisible(UIView *view, CGRect screenBounds) {
+static void ABDumpViewIfBottomVisible(UIView *view, CGRect screenBounds, NSInteger depth) {
     CGRect frameInWindow = [view convertRect:view.bounds toView:nil];
-    BOOL isBottomArea = CGRectGetMinY(frameInWindow) > screenBounds.size.height * 0.6;
-    BOOL isVisible = !view.hidden && view.alpha > 0.01 && frameInWindow.size.width > 20 && frameInWindow.size.height > 10;
-    if (isBottomArea && isVisible) {
-        ABDebugLog(@"[VIEWDUMP] %@ frame=%@ hidden=%d alpha=%.2f", NSStringFromClass([view class]),
-                   NSStringFromCGRect(frameInWindow), view.hidden, (double)view.alpha);
+    // hiddenの値に関わらず、画面下部の領域に関わる全Viewを親子関係(インデント)付きで出す。
+    // MAAdView自体はhidden=YESになっているはずなので、それがこの階層のどこにいて、
+    // 実際に見えているプレーンなUIViewとどういう親子関係にあるかを特定するのが目的。
+    BOOL isBottomArea = CGRectGetMaxY(frameInWindow) > screenBounds.size.height * 0.6 && frameInWindow.size.height > 3;
+    if (isBottomArea) {
+        NSString *indent = [@"" stringByPaddingToLength:(NSUInteger)(depth * 2) withString:@" " startingAtIndex:0];
+        ABDebugLog(@"[VIEWDUMP] %@%@(super=%@) frame=%@ hidden=%d alpha=%.2f subviews=%lu", indent,
+                   NSStringFromClass([view class]), NSStringFromClass([view superclass]),
+                   NSStringFromCGRect(frameInWindow), view.hidden, (double)view.alpha,
+                   (unsigned long)view.subviews.count);
     }
     for (UIView *subview in view.subviews) {
-        ABDumpViewIfBottomVisible(subview, screenBounds);
+        ABDumpViewIfBottomVisible(subview, screenBounds, depth + 1);
     }
 }
 
@@ -508,7 +513,7 @@ void ABDumpVisibleBottomViews(void) {
     NSArray<UIWindow *> *windows = [UIApplication sharedApplication].windows;
 #pragma clang diagnostic pop
     for (UIWindow *window in windows) {
-        ABDumpViewIfBottomVisible(window, screenBounds);
+        ABDumpViewIfBottomVisible(window, screenBounds, 0);
     }
     ABDebugLog(@"[VIEWDUMP] === scan end ===");
 }
