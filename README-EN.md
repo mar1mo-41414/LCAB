@@ -40,6 +40,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 | Moloco | `PublisherFullscreenAd` (shared Interstitial/Rewarded implementation) / `MolocoBannerAdView` | No-ops the show call, hides the banner |
 | Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | No-ops show/displayBanner, hides the banner |
 | Unity Ads itself (legacy static API) | `UnityAds` class methods `show:placementId:options:` / `show:placementId:options:showDelegate:` | No-ops the show call |
+| Smaato (an Appodeal mediation destination) | `SMAInterstitial` / `SMARewardedInterstitial` / `SMABannerView` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present

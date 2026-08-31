@@ -318,6 +318,24 @@ static void AB_AdSurge_showAdFromRootViewController_customData_NoReward(id self,
     ABNotifyAdSurgeDelegate(self, NO);
 }
 
+/// Smaato(SmaatoSDKInterstitial/SmaatoSDKRewardedAds、Appodealのメディエーション先の一つ)。
+/// SMAInterstitial/SMARewardedInterstitialとも表示トリガーはshowFromViewController:で共通。
+/// リワードのdelegateコールバック名はrewardedVideoPresenterDidComplete:と推測(確証はベストエフォート)。
+static void AB_Smaato_showFromViewController_NoReward(id self, SEL _cmd, id vc) {
+    ABLogBlocked(self, _cmd);
+    id delegate = ABGetDelegate(self);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"adPresenterDisplayed:"), nil);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"adPresenterCompleted:"), nil);
+}
+static void AB_Smaato_showFromViewController_Reward(id self, SEL _cmd, id vc) {
+    ABLogBlocked(self, _cmd);
+    id delegate = ABGetDelegate(self);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"rewardedVideoPresenterWillAppear:"), nil);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"rewardedVideoPresenterDidAppear:"), nil);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"rewardedVideoPresenterDidComplete:"), nil);
+    ABCallDelegate1(delegate, NSSelectorFromString(@"adPresenterCompleted:"), nil);
+}
+
 #pragma mark - バナー系(表示トリガーがなく、window追加時に自動的に見えるようになるもの)
 
 /// バナーViewをwindowに追加させつつ即座に隠す。SDKによってはdidMoveToWindow後に自動リフレッシュ
@@ -367,6 +385,7 @@ AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_AdSurgeBannerAdView, ABOriginalAdSurgeBannerAd
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MolocoBannerAdView, ABOriginalMolocoBannerAdViewDidMoveToWindowIMP, ABOriginalMolocoBannerAdViewSetHiddenIMP, ABOriginalMolocoBannerAdViewLayoutSubviewsIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerView, ABOriginalUADSBannerViewDidMoveToWindowIMP, ABOriginalUADSBannerViewSetHiddenIMP, ABOriginalUADSBannerViewLayoutSubviewsIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_UADSBannerWrapperView, ABOriginalUADSBannerWrapperViewDidMoveToWindowIMP, ABOriginalUADSBannerWrapperViewSetHiddenIMP, ABOriginalUADSBannerWrapperViewLayoutSubviewsIMP)
+AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_SMABannerView, ABOriginalSMABannerViewDidMoveToWindowIMP, ABOriginalSMABannerViewSetHiddenIMP, ABOriginalSMABannerViewLayoutSubviewsIMP)
 
 /// 対象クラス自身がメソッドをオーバーライドしていない場合でも、継承元(UIViewなど)を
 /// 巻き込まずそのクラス専用の実装として安全に差し込む(ABSwizzleInstanceMethodKeepingOriginal参照)。
@@ -592,6 +611,16 @@ void ABInstallThirdPartyAdHooks(void) {
                  ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg, kTypesArgArgArg));
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:showDelegate:",
                  ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg, kTypesArgArgArgArg));
+
+    // Smaato (Appodealのメディエーション先の一つ)
+    ABLogSwizzle(@"SMAInterstitial.showFromViewController:",
+                 ABSwizzleInstanceMethod(@"SMAInterstitial", NSSelectorFromString(@"showFromViewController:"), (IMP)AB_Smaato_showFromViewController_NoReward, kTypesArg));
+    ABLogSwizzle(@"SMARewardedInterstitial.showFromViewController:",
+                 ABSwizzleInstanceMethod(@"SMARewardedInterstitial", NSSelectorFromString(@"showFromViewController:"), (IMP)AB_Smaato_showFromViewController_Reward, kTypesArg));
+    ABInstallHideBannerHookSet(@"SMABannerView",
+                               (IMP)AB_SMABannerView_didMoveToWindow, &ABOriginalSMABannerViewDidMoveToWindowIMP,
+                               (IMP)AB_SMABannerView_setHidden, &ABOriginalSMABannerViewSetHiddenIMP,
+                               (IMP)AB_SMABannerView_layoutSubviews, &ABOriginalSMABannerViewLayoutSubviewsIMP);
 
     // 診断: 広告関連クラスの登録状況をログに残す。ABInstallThirdPartyAdHooks自体は
     // dyldの新規イメージロード通知のたびに何度も呼ばれうる(ABConstructor.m参照)ため、
