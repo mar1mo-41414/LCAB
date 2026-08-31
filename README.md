@@ -97,11 +97,16 @@ SDK側がframeを書き戻す→……」という循環でメインスレッド
 
 `didMoveToWindow`+`setHidden:`の2点でもまだ不十分なケースを確認した。`MAAdView`は
 `setAlpha:`を独自オーバーライドしており、自動リフレッシュ時に`alpha`を明示的に1.0へ
-書き戻すコードが副作用として`hidden`も`NO`に戻していたと見られ、バナーが消えないまま
-だった。`setAlpha:`も乗っ取り、渡された値に関わらず常に0を強制しつつ`hidden`も
-再度強制することで解決した(StoneGrassの`MAAdView`で確認)。同種の問題は他のSDKでも
-起こりうるため、バナー系フックは全SDK共通で
-`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`の4点セットにしている。
+書き戻すコードが副作用として`hidden`も`NO`に戻していると見て`setAlpha:`も乗っ取ったが、
+それでもバナーが消えないケースが残った(StoneGrassの`MAAdView`)。画面下部のViewツリーを
+実際にダンプして特定したところ、`MAAdView`自身は正しく`hidden=1`になっているのに、
+その**子ビュー**(SDKが追加する無名の`UIView`インスタンス)が`hidden=0`のまま残っており、
+Unity統合特有の描画パス(推測)でUIKitの`hidden`を無視して表示され続けていた。`UIView`
+クラス自体をフックするのは危険(継承元=`UIView`全体を壊す既知のバグ、下記参照)なので、
+代わりに対象バナーコンテナの子孫を**特定インスタンス単位**で再帰的に`hidden=YES`にする
+(`ABForceHiddenRecursive`)ことで解決した。バナー系フックは全SDK共通で
+`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`の4点セットにし、いずれも
+自身だけでなく子孫全体に再帰的に`hidden`を強制する。
 
 ### リワード広告の報酬付与とMAAdのキャプチャ
 

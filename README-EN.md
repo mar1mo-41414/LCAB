@@ -101,11 +101,18 @@ invisible, so `frame` is now left to the SDK/Auto Layout.
 
 Even `didMoveToWindow` + `setHidden:` turned out insufficient in one case: `MAAdView` overrides
 `setAlpha:`, and its auto-refresh logic appears to explicitly reset `alpha` back to 1.0 — with the
-side effect of also resetting `hidden` back to `NO` — so the banner stayed visible. Hijacking
-`setAlpha:` as well (forcing 0 regardless of the value passed in, then re-forcing `hidden`) fixed
-it (confirmed with `MAAdView` in StoneGrass). Since the same kind of issue could show up in other
-SDKs too, every banner hook now uses a common four-method set:
-`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`.
+side effect of also resetting `hidden` back to `NO`. Hijacking `setAlpha:` too (forcing 0
+regardless of the value passed in, then re-forcing `hidden`) was tried, but the banner still
+stayed visible in one case (StoneGrass's `MAAdView`). Dumping the actual view tree at the bottom
+of the screen showed why: `MAAdView` itself was correctly `hidden = 1`, but its **child view**
+(an anonymous `UIView` instance added by the SDK) stayed `hidden = 0` and kept rendering anyway —
+likely through a Unity-integration-specific drawing path (assumed) that ignores UIKit's `hidden`.
+Hooking `UIView` itself would be dangerous (it would corrupt the shared base class every `UIView`
+inherits from — the same known bug described below), so instead the banner container's
+descendants are forced to `hidden = YES` recursively at the **specific instance** level
+(`ABForceHiddenRecursive`). Every banner hook now uses a common four-method set —
+`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:` — and each one recursively forces
+`hidden` on itself and all of its descendants, not just itself.
 
 ### Reward granting and capturing a real MAAd
 

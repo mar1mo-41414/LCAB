@@ -359,6 +359,20 @@ static void ABForceHidden(UIView *view) {
     }
 }
 
+/// MAAdViewのようなSDKは、自身は正しくhidden=YESにしても、子ビュー(独自のUIViewインスタンス)が
+/// hidden=NOのまま残り、かつ何らかの独自レンダリングパス(Unity統合でのMetal直接描画等、
+/// UIKitのhiddenプロパティを無視して描画されるパス)で表示され続けるケースを実際に確認した
+/// (StoneGrassのMAAdView: 自身はhidden=1なのに子のUIViewがhidden=0のままバナーが見え続けた)。
+/// UIViewクラス自体をフックするのは危険(継承元=UIView全体を壊す既知のバグ)なので、代わりに
+/// 「このバナーコンテナの子孫」という特定インスタンス単位でhiddenを再帰的に強制する
+/// (クラスの実装を変えるのではなくプロパティ値を設定するだけなので安全)。
+static void ABForceHiddenRecursive(UIView *view) {
+    ABForceHidden(view);
+    for (UIView *subview in view.subviews) {
+        ABForceHiddenRecursive(subview);
+    }
+}
+
 #define AB_DEFINE_HIDE_BANNER_HOOK_SET(prefix, didMoveVar, setHiddenVar, layoutVar, setAlphaVar) \
     static IMP didMoveVar = NULL; \
     static IMP setHiddenVar = NULL; \
@@ -369,26 +383,27 @@ static void ABForceHidden(UIView *view) {
         if (didMoveVar) { \
             ((void (*)(id, SEL))didMoveVar)(self, _cmd); \
         } \
-        ABForceHidden(self); \
+        ABForceHiddenRecursive(self); \
     } \
     static void prefix##_setHidden(UIView *self, SEL _cmd, BOOL hidden) { \
         ABDebugLog(@"[BLOCKED] %@ setHidden:%@", NSStringFromClass([self class]), hidden ? @"YES" : @"NO"); \
         if (setHiddenVar) { \
             ((void (*)(id, SEL, BOOL))setHiddenVar)(self, _cmd, YES); \
         } \
+        ABForceHiddenRecursive(self); \
     } \
     static void prefix##_layoutSubviews(UIView *self, SEL _cmd) { \
         if (layoutVar) { \
             ((void (*)(id, SEL))layoutVar)(self, _cmd); \
         } \
-        ABForceHidden(self); \
+        ABForceHiddenRecursive(self); \
     } \
     static void prefix##_setAlpha(UIView *self, SEL _cmd, CGFloat alpha) { \
         ABDebugLog(@"[BLOCKED] %@ setAlpha:%.2f", NSStringFromClass([self class]), (double)alpha); \
         if (setAlphaVar) { \
             ((void (*)(id, SEL, CGFloat))setAlphaVar)(self, _cmd, 0.0); \
         } \
-        ABForceHidden(self); \
+        ABForceHiddenRecursive(self); \
     }
 
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_GADBannerView, ABOriginalGADBannerViewDidMoveToWindowIMP, ABOriginalGADBannerViewSetHiddenIMP, ABOriginalGADBannerViewLayoutSubviewsIMP, ABOriginalGADBannerViewSetAlphaIMP)
