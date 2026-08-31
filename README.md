@@ -104,9 +104,18 @@ SDK側がframeを書き戻す→……」という循環でメインスレッド
 Unity統合特有の描画パス(推測)でUIKitの`hidden`を無視して表示され続けていた。`UIView`
 クラス自体をフックするのは危険(継承元=`UIView`全体を壊す既知のバグ、下記参照)なので、
 代わりに対象バナーコンテナの子孫を**特定インスタンス単位**で再帰的に`hidden=YES`にする
-(`ABForceHiddenRecursive`)ことで解決した。バナー系フックは全SDK共通で
+(`ABForceHiddenRecursive`)ようにした。バナー系フックは全SDK共通で
 `didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:`の4点セットにし、いずれも
 自身だけでなく子孫全体に再帰的に`hidden`を強制する。
+
+StoneGrassの`MAAdView`では、この再帰的hiddenを`view.layer.hidden`/`view.layer.opacity=0`
+というCALayerレベルの直接操作にまで広げても、さらに`didMoveToWindow`時に対象View自体を
+`removeFromSuperview`でView階層から完全に切り離しても、なお画面にバナーが表示され続けた。
+View階層ダンプ上は完全に非表示・切り離し済みであることを確認しているため、これは
+Objective-Cランタイム層の対策では手が届かない、LiveContainerの描画パイプライン
+(Unity統合特有の可能性が高い)に起因する制約と判断し、対応を断念した。同様の症状に
+遭遇した場合は、まずView階層ダンプ(`ABDumpVisibleBottomViews`)で`hidden`状態を確認し、
+「View階層上は正しく非表示なのに画面に見える」場合はこの既知の制約に該当する。
 
 ### リワード広告の報酬付与とMAAdのキャプチャ
 

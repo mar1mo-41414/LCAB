@@ -114,6 +114,16 @@ descendants are forced to `hidden = YES` recursively at the **specific instance*
 `didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:` — and each one recursively forces
 `hidden` on itself and all of its descendants, not just itself.
 
+On StoneGrass's `MAAdView`, even extending this recursive hiding to direct `CALayer` manipulation
+(`view.layer.hidden` / `view.layer.opacity = 0`), and even detaching the view entirely from the
+view hierarchy with `removeFromSuperview` on `didMoveToWindow`, the banner still stayed visible.
+The view tree dump confirmed the view was fully hidden/detached at the Objective-C runtime level,
+so this was judged to be a constraint of LiveContainer's rendering pipeline (likely something
+specific to the Unity integration) that's out of reach of runtime-level fixes, and support for it
+was dropped. If you hit the same symptom, dump the view tree first
+(`ABDumpVisibleBottomViews`) — if it's fully hidden there but still visible on screen, it matches
+this known limitation.
+
 ### Reward granting and capturing a real MAAd
 
 After blocking a rewarded ad's show call, the SDK's delegate is notified of success as if the ad
