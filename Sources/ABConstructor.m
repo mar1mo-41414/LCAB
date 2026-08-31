@@ -63,4 +63,23 @@ static void ABEntryPoint(void) {
 
     // 遅延ロードされる広告ネットワークSDKを取りこぼさないための本命の仕組み。
     _dyld_register_func_for_add_image(ABOnImageAdded);
+
+    // 診断用: 非表示化フックが本当に正しいクラスを捉えているのか、画面下部に実際に
+    // 見えているViewを定期的にダンプして確認する(StoneGrassでMAAdView.hidden=YESに
+    // なっているはずのバナーが消えない問題の調査用)。30秒間、3秒おき。
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+                                                        object:nil
+                                                         queue:[NSOperationQueue mainQueue]
+                                                    usingBlock:^(NSNotification * _Nonnull note) {
+        __block NSInteger remainingTicks = 10;
+        __block NSTimer *timer = nil;
+        timer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer * _Nonnull t) {
+            ABDumpVisibleBottomViews();
+            remainingTicks--;
+            if (remainingTicks <= 0) {
+                [t invalidate];
+            }
+        }];
+        (void)timer;
+    }];
 }

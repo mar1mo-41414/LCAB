@@ -7,4 +7,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 実行時にNSClassFromStringで確認してから動的にhookする)。
 void ABInstallThirdPartyAdHooks(void);
 
+/// 診断用: 画面下部(下40%)に実際に見えている(hidden=NOかつalpha>0の)Viewのクラス名・frameを
+/// ログに書き出す。非表示化フックが本当に正しいクラスを捉えているか、それとも別のクラスが
+/// 表示の実体なのかを直接特定するための最終手段。メインスレッドから呼ぶこと。
+void ABDumpVisibleBottomViews(void);
+
 NS_ASSUME_NONNULL_END

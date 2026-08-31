@@ -372,6 +372,7 @@ static void ABForceHidden(UIView *view) {
         ABForceHidden(self); \
     } \
     static void prefix##_setHidden(UIView *self, SEL _cmd, BOOL hidden) { \
+        ABDebugLog(@"[BLOCKED] %@ setHidden:%@", NSStringFromClass([self class]), hidden ? @"YES" : @"NO"); \
         if (setHiddenVar) { \
             ((void (*)(id, SEL, BOOL))setHiddenVar)(self, _cmd, YES); \
         } \
@@ -383,6 +384,7 @@ static void ABForceHidden(UIView *view) {
         ABForceHidden(self); \
     } \
     static void prefix##_setAlpha(UIView *self, SEL _cmd, CGFloat alpha) { \
+        ABDebugLog(@"[BLOCKED] %@ setAlpha:%.2f", NSStringFromClass([self class]), (double)alpha); \
         if (setAlphaVar) { \
             ((void (*)(id, SEL, CGFloat))setAlphaVar)(self, _cmd, 0.0); \
         } \
@@ -479,6 +481,36 @@ static void ABInstallAdSurgeFullscreenAdHooks(NSString *className, BOOL grantRew
                  ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:"), showImp, kTypesArg));
     ABLogSwizzle([NSString stringWithFormat:@"%@.showAdFromRootViewController:customData:", className],
                  ABSwizzleInstanceMethod(className, NSSelectorFromString(@"showAdFromRootViewController:customData:"), showCustomDataImp, kTypesArgArg));
+}
+
+#pragma mark - 診断: 画面下部に実際に見えているViewをダンプする
+#pragma mark   非表示化フックが本当に対象クラスを捉えているのか、それとも全く別のクラスが
+#pragma mark   表示の実体なのかを直接特定するための最終手段。
+
+static void ABDumpViewIfBottomVisible(UIView *view, CGRect screenBounds) {
+    CGRect frameInWindow = [view convertRect:view.bounds toView:nil];
+    BOOL isBottomArea = CGRectGetMinY(frameInWindow) > screenBounds.size.height * 0.6;
+    BOOL isVisible = !view.hidden && view.alpha > 0.01 && frameInWindow.size.width > 20 && frameInWindow.size.height > 10;
+    if (isBottomArea && isVisible) {
+        ABDebugLog(@"[VIEWDUMP] %@ frame=%@ hidden=%d alpha=%.2f", NSStringFromClass([view class]),
+                   NSStringFromCGRect(frameInWindow), view.hidden, (double)view.alpha);
+    }
+    for (UIView *subview in view.subviews) {
+        ABDumpViewIfBottomVisible(subview, screenBounds);
+    }
+}
+
+void ABDumpVisibleBottomViews(void) {
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    ABDebugLog(@"[VIEWDUMP] === scan start ===");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    NSArray<UIWindow *> *windows = [UIApplication sharedApplication].windows;
+#pragma clang diagnostic pop
+    for (UIWindow *window in windows) {
+        ABDumpViewIfBottomVisible(window, screenBounds);
+    }
+    ABDebugLog(@"[VIEWDUMP] === scan end ===");
 }
 
 #pragma mark - 診断: ロード済みの広告関連クラスを洗い出す
