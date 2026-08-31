@@ -357,6 +357,15 @@ static void ABForceHidden(UIView *view) {
     if (!view.hidden) {
         view.hidden = YES;
     }
+    // UIViewのhiddenプロパティ(=layer.hidden経由の通常のコンポジット制御)を再帰的に
+    // 子孫までYESにしても、Unity統合特有の描画パスではまだ画面に見え続けるケースを実際に
+    // 確認した(StoneGrassのMAAdView: View階層上はhidden=1が子まで正しく伝播しているのに
+    // バナーが消えなかった)。CALayerを直接操作すれば、UIViewのプロパティ経由の同期を
+    // バイパスしている場合でも効く可能性があるため、layer.hidden/opacityも直接強制する。
+    view.layer.hidden = YES;
+    if (view.layer.opacity != 0.0f) {
+        view.layer.opacity = 0.0f;
+    }
 }
 
 /// MAAdViewのようなSDKは、自身は正しくhidden=YESにしても、子ビュー(独自のUIViewインスタンス)が
