@@ -83,6 +83,71 @@ to `hidden = YES` recursively at the **specific instance** level (`ABForceHidden
 banner hook now uses a common four-method set — `didMoveToWindow`/`setHidden:`/`layoutSubviews`/
 `setAlpha:` — and each one recursively forces `hidden` on itself and all of its descendants.
 
+## The parent wrapper around a banner container can stay behind as a blank strip (unresolved)
+
+Even when `ABForceHiddenRecursive` successfully hides a banner container and all its
+descendants, the **dedicated wrapper View** that wraps it as a full-width strip (a generic,
+unhookable `UIView` the SDK provides) can keep reserving its height and stay visible as a blank
+white strip. Confirmed on-device on Snow: `GFPNativeAd` gets rendered through a custom layout
+(`FADAdViewCustomLayout`), whose own parent is a plain, anonymous `UIView`.
+
+A heuristic was implemented and tried: walk up the ancestor chain and recursively force `hidden`
+as long as each ancestor has exactly one child (this banner). It was reverted after on-device
+testing showed the opposite problem — in Snow's actual UI hierarchy, intermediate containers
+frequently end up with exactly one child purely as a matter of layout, not because they're
+ad-specific wrappers. The condition kept holding much further up the hierarchy than expected,
+and the hiding cascaded into unrelated, legitimate UI (the entire bottom toolbar). "Has exactly
+one child" feels like a reasonable signal for an ad-only wrapper, but it's a weak heuristic in
+practice, and the risk of a false positive grows the further you walk up the tree.
+
+This blank strip is accepted as a known limitation for now. The ad content itself (image, text,
+tap targets) does get hidden, so the practical impact is reduced even though the strip remains.
+
+## When the delegate argument is a measurement/relay layer, not the real one
+
+The `delegate` passed in for reward notification can turn out to be, not the game's own
+implementation, but a **measurement/relay wrapper object** supplied by the mediation SDK (Godus:
+the `showDelegate` argument of Unity Ads' legacy static API
+`show:placementId:options:showDelegate:` turned out to be ironSource's AdQuality measurement
+layer, `SMLDelegate`, a subclass of `ISAdQualityAdDelegate`). This wrapper answers YES to
+`respondsToSelector:` and the call itself succeeds, but it can perform additional internal
+validation (ad lifecycle state tracking, inventory-existence checks, etc.), so simply calling the
+protocol method doesn't always take effect.
+
+In this situation, don't trust `respondsToSelector:` alone — dump the delegate's actual class
+name, class chain (walk `class_getSuperclass`), and ivar list (`class_copyIvarList` +
+`ivar_getTypeEncoding` + `object_getIvar`) to a diagnostic log, and check whether it's holding the
+real delegate in a separate ivar. On Godus, `SMLDelegate`'s `_strongDelegate` ivar held a
+reference to the actual mediation adapter (`ISUnityAdsRewardedVideoDelegate`); notifying that
+object directly — `unityAdsAdLoaded:` (load complete) → `unityAdsShowStart:` (show start) →
+`unityAdsShowComplete:withFinishState:` (show complete), in that order — got the reward granted.
+Some SDKs also internally validate a "load complete → show start → show complete" lifecycle order
+for reward callbacks, so sending the load-complete notification first (not just show-complete)
+tends to help it go through. When you're not confident about the exact enum value (e.g.
+`finishState`), sending several candidate values (0/1/2, etc.) in sequence is a practical,
+if inelegant, way to land on the one that works.
+
+## `removeFromSuperview` can crash on a delay
+
+The "last resort" of detaching a banner container from the view hierarchy via `removeFromSuperview`
+(described above) triggered a new kind of crash on Snow. `FADCustomLayoutBaseView` (a GFP native
+ad) had an Auto Layout constraint tying its `centerX` to another, unrelated View's
+(`FADAdViewCustomLayout`) `centerX` — not a sibling, not an ancestor. Detaching it with
+`removeFromSuperview` left that constraint in an invalid state ("no common ancestor").
+
+The crash (`NSInternalInconsistencyException`: "because they have no common ancestor") didn't
+happen at the point `removeFromSuperview` was called — it happened on the **next UIKit layout
+cycle** (`UpdateCycle` → `QuartzCore` → `UIKitCore`, a completely separate, asynchronous point in
+the call stack) when the leftover constraint got re-evaluated. Because of this, wrapping the
+`removeFromSuperview` call itself in `@try`/`@catch` (which was tried) did not prevent the crash —
+the exception's origin was outside the calling stack frame that could catch it.
+
+This happens because `removeFromSuperview` only detaches the view from the hierarchy; it doesn't
+automatically deactivate an `NSLayoutConstraint` instance that some other, external code is
+holding a reference to and that still references the removed view. The fix was to add a dedicated
+variant (`AB_DEFINE_HIDE_BANNER_HOOK_SET_NO_REMOVE`) that skips `removeFromSuperview` entirely for
+classes known to carry this crash risk, settling for `hidden` alone.
+
 ## Reward granting and capturing a real MAAd
 
 After blocking a rewarded ad's show call, the SDK's delegate is notified of success as if the ad
@@ -99,12 +164,49 @@ after a blocked show call.
 `ABDebugLog` records whether each hook installed successfully, which hooks actually fired, and the
 outcome of delegate notifications for reward granting. When investigating an unknown ad SDK or an
 SDK-version API difference, this narrows the problem down much faster than static analysis alone.
+The log is overwritten on every process launch, so it always holds only the most recent run
+(it used to append, which mixed up multiple launches and made investigation confusing).
+
+One implementation pitfall: `ABDebugLog` originally opened/seeked/wrote/closed the file on every
+single line. Combined with a diagnostic class-dump feature (below) that can emit 600+ lines in one
+go, this blocked the main thread long enough to get killed by the launch watchdog — a real crash
+observed on Godus. The fix was to open the file handle once at process start and reuse it. Even
+logging, which looks cheap, needs its I/O cost estimated once there's a code path that can emit a
+lot of it.
 
 The view tree dump (`ABDumpVisibleBottomViews`) prints the view hierarchy near the bottom of the
 screen while ignoring `hidden` state — useful for confirming whether a view that's still visible on
-screen is actually hidden/detached at the runtime level.
+screen is actually hidden/detached at the runtime level. Since some apps only show ads after a
+specific screen transition (tens of seconds to minutes after launch) rather than immediately at
+launch, don't hard-code the monitoring window — tune it to the symptom (one case needed extending
+it from 30 seconds to 2 minutes).
 
-## Unresolved known limitation: StoneGrass's `MAAdView` banner
+## Discovering an unknown ad SDK
+
+When every supported SDK is hooked but an ad still won't go away, `ABLogSuspiciousAdClasses` (used
+inside `ABInstallThirdPartyAdHooks`) enumerates runtime-registered classes matching a diagnostic
+keyword list (`Interstitial`/`Rewarded`/`GFP`/etc.) and logs them. Classes with a naming scheme not
+in that list won't show up at first, though. On Snow, an unknown prefix "FAD" was completely
+invisible at first; only after the view tree dump happened to reveal a class name that mapped
+directly to the "i" info icon itself (`FADInformationIconView`) — and after adding `FAD` to the
+keyword list — did the full picture (the `FADCustomLayoutBaseView` hierarchy, etc.) emerge.
+
+Useful leads:
+
+- The link target of the "why this ad" / AdChoices-style info icon shown on the ad. On Snow this
+  turned out to be LINE's ad-optimization terms page (`terms.line.me`), which is what identified
+  the SDK as NAVER/LINE's in-house ad platform "GFP".
+- Class name prefixes/patterns visible in a view tree dump. A thin wrapper class the app itself
+  implements (Snow's `YRInterstitialPopupGFPAd`-style naming) often holds a reference to the real
+  SDK class internally; dumping its property types (`class_copyPropertyList` +
+  `property_getAttributes`) reveals the actual class name.
+- When a class is found but the right method name isn't obvious, dumping the full instance- and
+  class-method list with `class_copyMethodList` is the reliable route — using method names
+  confirmed on-device beats stacking up guesses, and is faster.
+
+## Unresolved known limitations
+
+### StoneGrass's `MAAdView` banner
 
 On one app (StoneGrass, a Unity-integrated title), even extending the recursive hiding described
 above to direct `CALayer` manipulation (`view.layer.hidden` / `view.layer.opacity = 0`), and even
@@ -114,6 +216,10 @@ runtime level, so this was judged to be a constraint of LiveContainer's renderin
 something specific to the Unity integration) that's out of reach of runtime-level fixes. If you hit
 the same symptom, dump the view tree first — if it's fully hidden there but still visible on
 screen, it matches this known limitation.
+
+### Snow's banner strip staying behind
+
+See "The parent wrapper around a banner container can stay behind as a blank strip" above.
 
 ## Build from source
 
