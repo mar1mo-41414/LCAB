@@ -8,6 +8,7 @@ A dylib that gets injected into iOS apps running under LiveContainer to disable 
 - The "show" trigger of major third-party ad SDKs, when present
 
 It targets common OS/SDK classes rather than any specific app, so it works generically.
+See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for how it works under the hood.
 
 ## Important constraints
 
@@ -24,7 +25,7 @@ It targets common OS/SDK classes rather than any specific app, so it works gener
 - iOS 15.0+ (arm64)
 - LiveContainer
 
-## Supported ad mechanisms
+## Supported ad SDKs
 
 | Kind | Target class | Behavior |
 |---|---|---|
@@ -46,96 +47,15 @@ Since a given app/build may not include every third-party SDK, each hook checks 
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
 would crash the app, so this is done dynamically instead.
 
-## How it works
+## Install
 
-Instead of CydiaSubstrate's `%hook` (Logos), this uses plain Objective-C runtime method
-swizzling. LiveContainer's in-process injection environment can't assume CydiaSubstrate is
-available, so this follows the same approach as the sister project
-[LCME (iOS_LC_MemEditor)](https://github.com/mar1mo-41414/LCME).
+Download the latest `LCAdBlocker.dylib` from the [Releases](../../releases) page and add it as an
+injected dylib in LiveContainer's per-app tweak settings. Pushing a tag triggers GitHub Actions to
+build automatically and publish `LCAdBlocker.dylib` to the Releases page.
 
-Hooks are installed automatically on dylib load via `__attribute__((constructor))`, and the same
-install pass runs a second time after `UIApplicationDidFinishLaunchingNotification` (an extra
-dylib like UnityFramework may not have loaded/registered its classes yet at constructor time).
-On top of that, `_dyld_register_func_for_add_image` re-runs the install pass for every shared
-library/framework loaded afterward. On mediation platforms like Appodeal, individual ad network
-SDKs (e.g. `AppLovinSDK.framework`) may not actually get loaded at app launch at all — only once
-the mediation layer initializes them, which can happen well after `didFinishLaunching` (e.g. after
-Unity's own C# code starts running) — so the two earlier capture points alone miss them.
+### Build from source
 
-That said, an app launch can load hundreds of shared libraries (including system ones), and a
-naive "re-try every hook from scratch every time" implementation actually caused the app to hang
-and never finish launching, buried under a pile of queued reinstall tasks. Two mitigations fix
-this: (1) `ABSwizzle` keeps a success cache — a hook that already succeeded is never retried, so
-repeated `NSClassFromString` lookups and class-list rescans are skipped; (2) the dyld callback
-itself is coalesced — while a reinstall task is already queued on the main queue, new image-load
-events don't queue another one. Together, the work done per image load gets lighter over time.
-
-- `Sources/ABSwizzle.{h,m}`: shared helper that swaps an IMP only after confirming the
-  class/selector exist at runtime. Using `class_getInstanceMethod`+`method_setImplementation`
-  directly is dangerous when the target class doesn't implement the selector itself (i.e. it's
-  only inherited) — the swap lands on the shared base class (e.g. `UIView`, inherited by
-  countless classes) instead, which actually happened once and broke UI rendering across the
-  whole app. To avoid this, the helper first tries `class_addMethod` to add a class-specific
-  implementation; only when that fails (the class already overrides the selector itself) does it
-  fall back to `method_setImplementation`.
-- `Sources/ABStoreKitHooks.{h,m}`: hooks for Apple's native StoreKit mechanisms
-- `Sources/ABThirdPartyAdHooks.{h,m}`: hooks for third-party ad SDKs
-- `Sources/ABDebugLog.{h,m}`: a lightweight diagnostic logger. Writes `lcadblocker.log` under the
-  app's Documents directory, recording whether each hook installed successfully, which hooks
-  actually fired, and the outcome of delegate notifications for reward granting. Used to
-  investigate unknown ad SDKs or SDK-version API differences.
-- `Sources/ABConstructor.m`: entry point
-
-### Hiding banner ads
-
-Banner ad views have no explicit "show" trigger — they become visible automatically once added to
-the window hierarchy. Hooking `didMoveToWindow` alone isn't enough, since some SDKs asynchronously
-write `hidden` back to `NO` later (observed with AppLovin MAX's `MAAdView` during auto-refresh), so
-`setHidden:` is also hijacked to always force `YES` regardless of the value passed in.
-
-An earlier version also forced `frame` to `CGRectZero` directly, but this caused a hang on views
-under Auto Layout constraints (observed with InMobi's `IMBanner`): frame change → constraint
-violation → re-layout request → `layoutSubviews` fires again → the SDK writes the frame back →
-… — the main thread got stuck in this cycle. Forcing `hidden` alone is enough to make the view
-invisible, so `frame` is now left to the SDK/Auto Layout.
-
-Even `didMoveToWindow` + `setHidden:` turned out insufficient in one case: `MAAdView` overrides
-`setAlpha:`, and its auto-refresh logic appears to explicitly reset `alpha` back to 1.0 — with the
-side effect of also resetting `hidden` back to `NO`. Hijacking `setAlpha:` too (forcing 0
-regardless of the value passed in, then re-forcing `hidden`) was tried, but the banner still
-stayed visible in one case (StoneGrass's `MAAdView`). Dumping the actual view tree at the bottom
-of the screen showed why: `MAAdView` itself was correctly `hidden = 1`, but its **child view**
-(an anonymous `UIView` instance added by the SDK) stayed `hidden = 0` and kept rendering anyway —
-likely through a Unity-integration-specific drawing path (assumed) that ignores UIKit's `hidden`.
-Hooking `UIView` itself would be dangerous (it would corrupt the shared base class every `UIView`
-inherits from — the same known bug described below), so instead the banner container's
-descendants are forced to `hidden = YES` recursively at the **specific instance** level
-(`ABForceHiddenRecursive`). Every banner hook now uses a common four-method set —
-`didMoveToWindow`/`setHidden:`/`layoutSubviews`/`setAlpha:` — and each one recursively forces
-`hidden` on itself and all of its descendants, not just itself.
-
-On StoneGrass's `MAAdView`, even extending this recursive hiding to direct `CALayer` manipulation
-(`view.layer.hidden` / `view.layer.opacity = 0`), and even detaching the view entirely from the
-view hierarchy with `removeFromSuperview` on `didMoveToWindow`, the banner still stayed visible.
-The view tree dump confirmed the view was fully hidden/detached at the Objective-C runtime level,
-so this was judged to be a constraint of LiveContainer's rendering pipeline (likely something
-specific to the Unity integration) that's out of reach of runtime-level fixes, and support for it
-was dropped. If you hit the same symptom, dump the view tree first
-(`ABDumpVisibleBottomViews`) — if it's fully hidden there but still visible on screen, it matches
-this known limitation.
-
-### Reward granting and capturing a real MAAd
-
-After blocking a rewarded ad's show call, the SDK's delegate is notified of success as if the ad
-had actually been watched, so the game's own logic can proceed (see "Known limitations" below).
-For AppLovin MAX specifically, the delegate implementation (`MAUnityAdManager` from the official
-Unity Plugin, source available on GitHub) packs `ad.adUnitIdentifier` and other properties
-directly into an NSDictionary literal, so passing `nil` or a fake object as `ad` can crash. To
-work around this, `didLoadAd:` is hijacked to capture the real `MAAd` instance the SDK actually
-loaded (keyed by format: interstitial/rewarded/appOpen), and that captured instance is reused when
-notifying the delegate after a blocked show call.
-
-## Build
+Requires the [Theos](https://theos.dev/) development environment.
 
 ```bash
 export THEOS=~/.theos
@@ -144,33 +64,26 @@ make
 
 Produces `.theos/obj/debug/LCAdBlocker.dylib`.
 
-## Install
-
-In LiveContainer's per-app tweak settings, add the built `LCAdBlocker.dylib` as an injected dylib.
-
 ## Known limitations
 
 - If an ad SDK is implemented in Swift, exposes its show API only as a protocol existential, and
   the concrete implementation class doesn't subclass NSObject (i.e. is never registered with the
-  Objective-C runtime at all), it's out of scope. Objective-C / NSObject-bridged mediation
-  adapters statically linked into the app (AdMob/Meta/AppLovin/ironSource/Chartboost/InMobi/
-  Moloco/Unity Ads, etc.) are the actual targets.
-  - Both InMobi and Moloco are implemented in Swift internally, but their target classes
-    (`IMInterstitial`/`IMBanner`, `PublisherFullscreenAd`/`MolocoBannerAdView`) are NSObject
-    subclasses bridged to Objective-C, so they're hooked by matching a class-name suffix instead
-    of an exact name (the runtime class name is mangled by SDK version, e.g.
-    `_TtC9InMobiSDK14IMInterstitial`).
-  - Unity Ads exposes a newer "UADS"-prefixed Objective-C-bridged API since SDK 4.x
-    (`UADSInterstitialAd`/`UADSRewardedAd`/`UADSBannerView`), with no name mangling, so it's
-    hooked directly via `NSClassFromString`. Even when routed through a mediation adapter (e.g.
-    AppLovin MAX's Unity Ads adapter), the call ultimately reaches these two classes' `show:delegate:`.
-- Rewarded ads (`GADRewardedAd` / `FBRewardedVideoAd` / `MARewardedAd` / `AdSurgeRewardedAd` /
-  `UADSRewardedAd` / Moloco's PublisherFullscreenAd) disable the show call, but still report
-  success back to the SDK as if the ad had been watched (the delegate's
-  `didRewardUserForAd:withReward:`-equivalent callback, or the completion block). This isn't
-  about granting an unfair advantage to third parties — it's this dylib's own user being able to
-  use the feature without watching an ad, which is the whole point of an ad blocker. Confidence in
-  the exact delegate method name/signature varies by SDK (AppLovin MAX and Google AdMob are based
-  on documented public APIs and are fairly reliable; the others are best-effort), and the
-  ad/reward arguments are passed as nil (sending a message to nil in Objective-C safely returns a
-  zero value for simple property access, so this is fine in practice).
+  Objective-C runtime at all), it's out of scope.
+- Rewarded ads disable the show call, but still report success back to the SDK as if the ad had
+  been watched. This isn't about granting an unfair advantage to third parties — it's this dylib's
+  own user being able to use the feature without watching an ad, which is the whole point of an ad
+  blocker.
+
+See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for per-SDK implementation details and unresolved
+limitations.
+
+## Contributing
+
+Even for a supported SDK, ads may still get through on a specific SDK version or a specific app's
+implementation. If you find an app where an ad isn't blocked with this dylib installed, or where
+installing it causes the app to misbehave (freeze, crash, etc.), please open an Issue with:
+
+- The app's bundle ID (e.g. `com.example.app`)
+- What kind of ad isn't going away / what's misbehaving (banner, interstitial, rewarded, app open,
+  etc.), and the ad SDK name if you know it (AdMob, AppLovin MAX, etc.)
+- The concrete symptom (ad stays visible, app won't launch, app becomes unresponsive, etc.)
