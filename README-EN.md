@@ -42,6 +42,9 @@ See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for how it works under the hood
 | Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | No-ops show/displayBanner, hides the banner |
 | Unity Ads itself (legacy static API) | `UnityAds` class methods `show:placementId:options:` / `show:placementId:options:showDelegate:` | No-ops the show call |
 | Smaato (an Appodeal mediation destination) | `SMAInterstitial` / `SMARewardedInterstitial` / `SMABannerView` | No-ops the show call, hides the banner |
+| Pangle (ByteDance/TikTok) | `PAGInterstitialAd` / `PAGLInterstitialAd` / `PAGRewardedAd` / `PAGBannerAd` | No-ops the show call, hides the banner |
+| Vungle Ads SDK (new API) | `VungleAdsSDK.VungleInterstitial` / `VungleAdsSDK.VungleRewarded` / `VungleAdsSDK.VungleBannerView` | No-ops the show call, hides the banner |
+| GFP (NAVER/LINE's in-house ad platform) | `GFPInterstitialAd` / `GFPRewardedAd` / `GFPBannerView` | No-ops the show call, hides the banner |
 
 Since a given app/build may not include every third-party SDK, each hook checks the class exists
 via `NSClassFromString` at launch before swizzling. Statically hooking a class that isn't present
@@ -73,9 +76,26 @@ Produces `.theos/obj/debug/LCAdBlocker.dylib`.
   been watched. This isn't about granting an unfair advantage to third parties — it's this dylib's
   own user being able to use the feature without watching an ad, which is the whole point of an ad
   blocker.
+- **The ad content itself (image, text, tap targets) can disappear while the banner slot around it
+  (a blank strip of space) stays reserved on screen.** That strip is often a generic `UIView` with
+  no SDK-specific hint in its class name, so it can't be hooked at the class level. A generic fix
+  that walks up the ancestor chain hiding views was tried, but it ended up hiding unrelated,
+  legitimate UI (buttons, etc.) too, confirmed on-device, and was reverted. This is a structural
+  limitation of a generic blocker and is accepted as a known limitation for now.
 
 See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for per-SDK implementation details and unresolved
 limitations.
+
+## Checking the diagnostic log
+
+`Documents/lcadblocker.log` records hook install results and which hooks actually fired
+(overwritten on every process launch, so it always holds only the most recent run). Useful when
+investigating an ad that isn't getting blocked, or when filing an Issue.
+
+To pull it out of a LiveContainer app:
+
+1. In LiveContainer's "My Apps", long-press the target app and choose "Open Data Folder"
+2. The Files app opens — go to `Documents` → `lcadblocker.log`
 
 ## Contributing
 

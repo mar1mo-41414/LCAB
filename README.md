@@ -39,6 +39,9 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 | Unity Ads本体(SDK 4.x系) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | show/displayBanner系をno-op化、バナーは非表示化 |
 | Unity Ads本体(レガシー静的API) | `UnityAds`クラスメソッド `show:placementId:options:` / `show:placementId:options:showDelegate:` | show系をno-op化 |
 | Smaato(Appodealのメディエーション先) | `SMAInterstitial` / `SMARewardedInterstitial` / `SMABannerView` | show系をno-op化、バナーは非表示化 |
+| Pangle(ByteDance/TikTok系) | `PAGInterstitialAd` / `PAGLInterstitialAd` / `PAGRewardedAd` / `PAGBannerAd` | show系をno-op化、バナーは非表示化 |
+| Vungle Ads SDK(新API) | `VungleAdsSDK.VungleInterstitial` / `VungleAdsSDK.VungleRewarded` / `VungleAdsSDK.VungleBannerView` | show系をno-op化、バナーは非表示化 |
+| GFP(NAVER/LINE系列の自社広告プラットフォーム) | `GFPInterstitialAd` / `GFPRewardedAd` / `GFPBannerView` | show系をno-op化、バナーは非表示化 |
 
 サードパーティSDKはアプリ・ビルドによって実装が含まれていないことがあるため、
 起動時に`NSClassFromString`でクラスの存在を確認してから動的にフックします。
@@ -68,9 +71,26 @@ make
 - リワード広告は、showそのものは無効化しつつ、広告を見た体でSDK側に成功コールバックを返すことで
   報酬を付与します。これは第三者へ不正な利益を与えるためではなく、このdylib自身の利用者が
   広告を見ずに機能を使えるようにする(=広告ブロッカーとしての本来の目的)ためのものです。
+- **広告のコンテンツ自体(画像・テキスト・タップ誘導)は消えても、それを囲んでいたバナー枠
+  (帯状の空白領域)がレイアウトスペースを確保したまま画面に残ることがあります。** この帯は
+  広告SDKが用意する汎用の`UIView`(クラス名にSDK固有の手がかりがない)であることが多く、
+  クラス単位でのフックができません。汎用的に祖先を遡って隠す対策も試しましたが、広告と
+  無関係な正当なUI(ボタン等)まで巻き込んで消してしまう副作用が実機で確認されたため撤回して
+  います。これは汎用ブロッカーとしての構造的な限界で、現状は既知の制約として受け入れています。
 
 その他、個々のSDKでの実装上の工夫や未解決の制約については
 [docs/TECHNICAL.md](docs/TECHNICAL.md)を参照してください。
+
+## 診断ログの確認方法
+
+`Documents/lcadblocker.log`に、フックのインストール成否・実際に発火したフックを記録した
+診断ログが出力されます(プロセス起動ごとに上書きされるため、常に直近の起動分のみが残ります)。
+広告が消えない場合の調査や、Issue報告の際に役立ちます。
+
+LiveContainerアプリ内から取り出す手順:
+
+1. LiveContainerの「マイアプリ」から対象アプリを長押しし、「データフォルダを開く」を選択
+2. ファイルAppが開くので `Documents` → `lcadblocker.log` を開く
 
 ## 協力のお願い
 
