@@ -64,12 +64,6 @@ static void AB_NoOp_WithArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg3) 
     ABLogBlocked(self, _cmd);
 }
 
-/// 4引数(id, id, id, id)の表示トリガー(レガシーUnityAds.show:placementId:options:showDelegate:等)を
-/// no-op化する。
-static void AB_NoOp_WithArgArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg3, id arg4) {
-    ABLogBlocked(self, _cmd);
-}
-
 #pragma mark - リワード付与ヘルパー(広告を見た体でSDKに結果を通知し、ゲーム側の続行を可能にする)
 #pragma mark   ユーザー自身が遊ぶための広告ブロッカーであり、広告を見ずに機能を使えることが目的のため、
 #pragma mark   報酬は成功扱いにする(不正な第三者への報酬付与ではなく、自分自身の環境のみに閉じる)。
@@ -111,6 +105,27 @@ static void ABCallDelegate2(id delegate, SEL sel, id arg1, id arg2) {
     }
 }
 
+/// (id, NSInteger)のdelegateコールバックを、存在すれば呼ぶ。第2引数がenumなどの整数型の場合、
+/// objc_msgSendへの単純キャストでは正しく渡せない(idとして渡すとnil=0以外の値を表現できない)ため
+/// NSInvocationを使う。
+static void ABCallDelegate1ThenInteger(id delegate, SEL sel, id arg1, NSInteger arg2) {
+    if (!delegate) {
+        return;
+    }
+    BOOL responds = [delegate respondsToSelector:sel];
+    ABDebugLog(@"[REWARD]   %@ respondsTo %@ -> %@", NSStringFromClass([delegate class]), NSStringFromSelector(sel), responds ? @"YES, calling" : @"NO");
+    if (!responds) {
+        return;
+    }
+    NSMethodSignature *sig = [delegate methodSignatureForSelector:sel];
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    inv.selector = sel;
+    inv.target = delegate;
+    [inv setArgument:&arg1 atIndex:2];
+    [inv setArgument:&arg2 atIndex:3];
+    [inv invoke];
+}
+
 #pragma mark - AppLovin MAX: ロード済みMAAdのキャプチャ
 #pragma mark   MAUnityAdManager(AppLovin公式Unityプラグインのdelegate実装、GitHub上のソースで確認済み)は
 #pragma mark   didDisplayAd:/didHideAd:/didRewardUserForAd:withReward:の冒頭で必ずad.formatを参照し、
@@ -131,6 +146,11 @@ static NSString *_Nullable ABMAXFormatKeyForAd(id ad) {
         return nil;
     }
     NSString *desc = [format description] ?: @"";
+    // "REWARDED_INTERSTITIAL"は"REWARD"にも"INTER"にも部分一致するため、
+    // 汎用の"REWARDED"/"INTERSTITIAL"より先に判定する。
+    if ([desc rangeOfString:@"REWARDED_INTERSTITIAL" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return @"REWARDED_INTERSTITIAL";
+    }
     if ([desc rangeOfString:@"REWARD" options:NSCaseInsensitiveSearch].location != NSNotFound) {
         return @"REWARDED";
     }
@@ -147,6 +167,7 @@ static NSString *_Nullable ABMAXFormatKeyForAd(id ad) {
 static NSString *_Nullable ABMAXFormatKeyForInstance(id self) {
     NSString *className = NSStringFromClass([self class]);
     if ([className isEqualToString:@"MARewardedAd"]) return @"REWARDED";
+    if ([className isEqualToString:@"MARewardedInterstitialAd"]) return @"REWARDED_INTERSTITIAL";
     if ([className isEqualToString:@"MAInterstitialAd"]) return @"INTERSTITIAL";
     if ([className isEqualToString:@"MAAppOpenAd"]) return @"APPOPEN";
     return nil;
@@ -263,6 +284,38 @@ static void AB_UADSRewardedAd_show_delegate(id self, SEL _cmd, id viewController
     ABCallDelegate1(delegate, NSSelectorFromString(@"unityAdsShowComplete:"), nil);
     ABCallDelegate2(delegate, NSSelectorFromString(@"unityAdsShowComplete:withFinishState:"), nil, nil);
     ABCallDelegate1(delegate, NSSelectorFromString(@"unityAdsShowStart:"), nil);
+}
+
+/// Unity Ads本体のレガシー静的API `+[UnityAds show:placementId:options:showDelegate:]`。
+/// 第4引数がdelegate。素のUnityAdsShowDelegateプロトコル(unityAdsShowStart:/
+/// unityAdsShowComplete:withState:、Unity公式ドキュメントに基づく)を第一候補として試すが、
+/// Godusでは実際に渡ってくるdelegateがゲーム自身の実装ではなく、ironSourceのAdQuality計測
+/// レイヤー(実測クラス名`SMLDelegate`、`ISAdQualityAdDelegate`のサブクラス)だった。
+/// SMLDelegate自身への通知だけでは報酬が付与されず、実機診断の結果、ivar `_strongDelegate`が
+/// 実際のメディエーションアダプタ本体(実測: `ISUnityAdsRewardedVideoDelegate`)を保持して
+/// いることが判明。これに対しunityAdsAdLoaded:(ロード完了)→unityAdsShowStart:(表示開始)→
+/// unityAdsShowComplete:withFinishState:(表示完了)の順で送ることで実機での報酬付与を確認した。
+/// finishStateの正しい値(UnityAdsFinishStateのenum)は未確証のため、候補値0/1/2を順に送る。
+/// ivar名`_strongDelegate`はSDKバージョン依存の可能性があるため存在確認してから使う。
+static void AB_UnityAdsClass_show_placementId_options_showDelegate(id self, SEL _cmd, id viewController, id placementId, id options, id showDelegate) {
+    ABLogBlocked(self, _cmd);
+    ABCallDelegate1(showDelegate, NSSelectorFromString(@"unityAdsShowStart:"), placementId);
+    ABCallDelegate1ThenInteger(showDelegate, NSSelectorFromString(@"unityAdsShowComplete:withState:"), placementId, 2 /* kUnityShowCompletionStateCompleted */);
+    ABCallDelegate1(showDelegate, NSSelectorFromString(@"unityAdsShowComplete:"), placementId);
+    ABCallDelegate1ThenInteger(showDelegate, NSSelectorFromString(@"unityAdsShowComplete:withFinishState:"), placementId, 2 /* kUnityAdsFinishStateCompleted */);
+    ABCallDelegate1ThenInteger(showDelegate, NSSelectorFromString(@"unityAdsDidFinish:withFinishState:"), placementId, 2 /* kUnityAdsFinishStateCompleted */);
+
+    Ivar strongDelegateIvar = class_getInstanceVariable([showDelegate class], "_strongDelegate");
+    if (strongDelegateIvar) {
+        id strongDelegate = object_getIvar(showDelegate, strongDelegateIvar);
+        if (strongDelegate) {
+            ABCallDelegate1(strongDelegate, NSSelectorFromString(@"unityAdsAdLoaded:"), placementId);
+            ABCallDelegate1(strongDelegate, NSSelectorFromString(@"unityAdsShowStart:"), placementId);
+            for (NSInteger state = 0; state <= 2; state++) {
+                ABCallDelegate1ThenInteger(strongDelegate, NSSelectorFromString(@"unityAdsShowComplete:withFinishState:"), placementId, state);
+            }
+        }
+    }
 }
 
 /// MolocoSDK PublisherFullscreenAd。rewardedDelegate/interstitialDelegateのivarを直接読む。
@@ -625,6 +678,11 @@ void ABInstallThirdPartyAdHooks(void) {
     // AppLovin MAX: インタースティシャル・リワード・アプリ起動時オープン広告は同じshow系APIを共有
     ABInstallMAXFullscreenAdHooks(@"MAInterstitialAd", NO);
     ABInstallMAXFullscreenAdHooks(@"MARewardedAd", YES);
+    // MARewardedInterstitialAd(リワード付きインタースティシャル、プレイアブルクリエイティブが
+    // 配信されることもある)はREADME公開時点で対応漏れだった。Godusの実機テストで、対応済みの
+    // MARewardedAd/MAInterstitialAdはブロックできているのに別の広告(AppLovinのプレイアブル)が
+    // 素通りする不具合として発覚した。show系APIはMARewardedAdと共通のため同じ汎用フックで足りる。
+    ABInstallMAXFullscreenAdHooks(@"MARewardedInterstitialAd", YES);
     ABInstallMAXFullscreenAdHooks(@"MAAppOpenAd", NO);
     ABInstallHideBannerHookSet(@"MAAdView",
                                (IMP)AB_MAAdView_didMoveToWindow, &ABOriginalMAAdViewDidMoveToWindowIMP,
@@ -704,7 +762,7 @@ void ABInstallThirdPartyAdHooks(void) {
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:",
                  ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg, kTypesArgArgArg));
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:showDelegate:",
-                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_NoOp_WithArgArgArgArg, kTypesArgArgArgArg));
+                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:showDelegate:"), (IMP)AB_UnityAdsClass_show_placementId_options_showDelegate, kTypesArgArgArgArg));
 
     // Smaato (Appodealのメディエーション先の一つ)
     ABLogSwizzle(@"SMAInterstitial.showFromViewController:",
