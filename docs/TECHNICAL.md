@@ -155,6 +155,109 @@ YESと答え、呼び出し自体も成功しますが、内部で追加の状�
 そのため`didLoadAd:`を横取りして実際にロードされた本物の`MAAd`インスタンスをフォーマット別
 (interstitial/rewarded/appOpen)にキャプチャしておき、show断念時にそれを使い回しています。
 
+## AppLovin MAXメディエーション: delegateがSDK公式プロトコルに従わないケース
+
+AppLovin MAXは複数の広告ネットワーク(Pangle、Unity Ads、Moloco等)を単一のAPI
+(`MARewardedAd`)の裏で切り替えるメディエーションプラットフォームです。各ネットワークの
+実SDK(`PAGRewardedAd`、`UADSRewardedAd`、`MolocoSDK.PublisherFullscreenAd`等)を
+直接フックする実装は、**そのSDKがアプリから直接(スタンドアロンで)使われている場合**には
+機能しますが、**MAXのメディエーションアダプタ経由で使われている場合**は、delegateの実体が
+各SDK公式ドキュメント通りのプロトコルを実装しない、AppLovin自前のブリッジクラス
+(`ALByteDanceRewardedVideoAdDelegate`、`ALUnityAdsRewardedDelegate`、
+`AppLovinMediationMolocoAdapter.MolocoRewardedAdapterDelegate`等、クラス名が`AL`
+プレフィックスまたは`AppLovin`を含む)になっていることが実機で判明しました。
+
+この場合に厄介なのは、単に「偽装通知が効かず報酬が付かない」だけでなく、**show自体を
+完全ブロックしたまま偽装delegate通知も失敗する(delegateが想定のセレクタに応答しない)と、
+広告が一切表示されないままゲーム側が広告完了コールバックを待ち続け、UIがフリーズする**
+ケースがあることです(tokyo.plott.tes: Molocoメディエーションで実機確認。BGMは鳴り続ける
+が操作不能になる症状)。
+
+対策として、各SDKのshowフック内でdelegateの実クラス名を調べ、AppLovinのブリッジクラスと
+判定できた場合はブロックせず元の実装(`ABSwizzleInstanceMethodKeepingOriginal`で保持した
+original IMP)に任せてパススルーし、広告自体は実際に表示させます。その上で、MAX公式の
+Unity Pluginが実装する`MAUnityAdManager.didDisplayAd:`(ネットワークを問わず、MAXが
+「広告ViewControllerの表示を認識した」タイミングで必ず呼ばれる)をフックし、そこから後述の
+自動クローズ・報酬強制ロジックに処理を委ねます。判定ロジックは次の通りシンプルです。
+
+```objc
+static BOOL ABDelegateLooksLikeMAXBridge(id delegate) {
+    NSString *className = NSStringFromClass([delegate class]);
+    return [className hasPrefix:@"AL"] || [className rangeOfString:@"AppLovin"].location != NSNotFound;
+}
+```
+
+delegateがアプリ自身の実装(スタンドアロンSDK利用)の場合はこの判定がNOになるため、
+従来通りのブロック+偽装delegate通知にフォールバックします。
+
+## リワード広告の自動クローズと報酬強制(MARewardedAd/MAX共通)
+
+`MARewardedAd`のshow系APIをブロックして偽装delegate通知する従来方式は、tokyo.plott.tesの
+実機検証で「広告の取得に失敗しました」という表示とともに失敗することが判明しました。
+`ALMediatedFullscreenAd`が持つ`adViewControllerObserverDelaySeconds`等のプロパティから、
+MAX SDKはshow呼び出し後に「実際に広告ViewControllerが画面に現れたか」を別タイマーで監視して
+おり、show自体を完全にブロックするとこの監視に引っかかると見ています。
+
+そのため`MARewardedAd`のshow系APIは**ブロックせずパススルー**し、`MAUnityAdManager.
+didDisplayAd:`が発火した直後(0.6秒後)に、画面最前面のpresentされたViewControllerを探して
+自動的に閉じる方式に切り替えました。閉じる際の具体的な報酬成立手段は、広告のクリエイティブ
+種別によって異なります。
+
+### 動画広告(`ALBaseVideoViewController`系)
+
+実機のクラス構造ダンプで、SDK自身が「完全視聴」を表すフラグ群(`wasPlayedToEnd`/
+`adViewFullyWatched`/`treatAdAsFullyWatched`)と、それらをもとに実際に報酬報告処理を
+起動する`-scheduleReportRewardTaskIfNeeded`を発見しました。単に`handleCloseButton`を
+呼ぶ、あるいは`dismissViewControllerAnimated:`で強制的に閉じるだけでは「早期スキップ」と
+みなされ報酬が付与されませんでしたが、これらのフラグを強制しつつ
+`scheduleReportRewardTaskIfNeeded`を直接呼ぶことで報酬付与に成功しました(実機で安定して
+再現)。
+
+`-avPlayer`プロパティ経由で本物の`AVPlayer`に直接アクセスし、動画終端近くまでシークして
+再生を再開させることでSDK自身の正規の終了検知を自然に発火させる案も試しましたが、
+tokyo.plott.tesの広告は実際にはHTML/MRAIDテンプレート内の`<video>`タグをWKWebViewが
+再生する形式で、`avPlayer`は毎回`nil`だったため機能しませんでした(動画広告でも
+クリエイティブの配信形式によって`avPlayer`が使えるとは限らない)。現在はこのAVPlayerシークは
+「使えれば使う」追加施策として残しつつ、主力は上記のフラグ強制+`scheduleReportRewardTaskIfNeeded`
+直接呼び出しです。
+
+`scheduleReportRewardTaskIfNeeded`が内部でタイマー(`reportRewardTimer`)を使っている
+可能性を考慮し、即座に閉じず2.5秒待ってから`handleCloseButton`/`dismissViewControllerAnimated:`
+で閉じます。早すぎるcloseは`ALMediatedFullscreenAd`側の`cancelRewardTask`(ivarとして存在を
+確認済み)を誘発し、せっかく起動した報酬報告を取り消してしまう懸念があるためです。
+
+### プレイアブル広告(`UnityAds.WebViewContainerViewController`)
+
+プレイアブル広告のViewController自体はメソッド8個だけの薄いコンテナで、上記のような
+自前の報酬報告メソッドを一切持ちません。実機のクラス一覧スキャン(`objc_getClassList`で
+特定キーワードを含む全クラスを列挙)から、AppLovin MAX自前のUnity Adsメディエーション
+アダプタ用delegateクラス`ALUnityAdsRewardedDelegate`を発見しました。これは
+`-showDidStart:`/`-showDidClick:`/`-showDidReceiveReward:`/`-showDidComplete:with:`/
+`-showDidFail:error:`という、Unity Ads SDKからの通知を受けてMAX公式のアダプタ用delegate
+プロトコル(`MARewardedAdapterDelegate`、ivar`_delegate`)へ転送する独自の内部メソッド群を
+持っています。
+
+このインスタンスを直接操作できれば、Unity Ads SDKの実際の視聴完了を待たずに報酬を
+成立させられます。生きたインスタンスを捕まえるため、初期化メソッド
+`-initWithParentAdapter:andNotify:`を`ABSwizzleInstanceMethodKeepingOriginal`で
+フックし(このメソッドはshow呼び出しより前、リスナーのセットアップ段階で実行されるため、
+`didDisplayAd:`発火後に初めてフックしても遅い。起動時の通常インストールパスで事前に
+仕込んでおく必要がある)、生成された`self`を静的変数に保持しておきます。広告が表示された
+タイミングで、このインスタンスへ`showDidStart:`→`showDidReceiveReward:`→
+`showDidComplete:with:`の順で直接送信することで報酬付与に成功しました
+(`showDidClick:`は実際にクリックしていないのに広告ネットワーク側のクリック計測を汚すため
+意図的に送っていません)。
+
+これらのメソッドの引数の実際の型(オブジェクトなのかプリミティブなのか)はドキュメント化
+されていないため、`objc_msgSend`への単純なキャストでは安全に呼べません。代わりに
+`methodSignatureForSelector:`で実行時に取得した型エンコーディングに従い、オブジェクト型の
+引数には`nil`、それ以外のプリミティブ型には0をバイト幅を確認した上で埋める汎用ヘルパー
+(`ABCallSelectorWithZeroFilledArgs`)を使って安全に呼び出しています。8バイトを超える型
+(構造体等)が来た場合はゼロ埋め用バッファを超えて読み取られる危険があるため、呼び出し
+自体を中止するガードも入れています。これはドキュメント化されていないSDK内部APIを
+実機のメソッド一覧ダンプだけを頼りに安全に叩くための汎用パターンとして、他のSDKの
+同様の調査にも応用できます。
+
 ## 診断ログとView階層ダンプ
 
 `ABDebugLog`がフックのインストール成否・実際に発火したフック・リワード付与時のdelegate通知

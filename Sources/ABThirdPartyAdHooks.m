@@ -2,6 +2,7 @@
 #import "ABSwizzle.h"
 #import "ABDebugLog.h"
 #import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -15,6 +16,16 @@ static const char *const kTypesArgArgArg = "v@:@@@";
 static const char *const kTypesArgArgArgArg = "v@:@@@@";
 static const char *const kTypesBool = "v@:B";
 static const char *const kTypesDouble = "v@:d"; // CGFloatはarm64ではdouble(64bit)
+static const char *const kTypesIdArgArg = "@@:@@"; // initWithX:andY:のようなid返り値のinitializer用
+
+// 診断ヘルパー(定義は本ファイル後方)。実機でクラス構造が未知のSDKを調査する際に使う。
+static void ABLogAllMethods(NSString *className);
+static void ABLogAllProperties(NSString *className);
+static void ABLogAllIvars(NSString *className);
+static void ABLogSwizzle(NSString *label, BOOL ok);
+static void ABLogClassesContainingSubstringNow(NSString *substring);
+static UIView *_Nullable ABFindSubviewClassNameContaining(UIView *root, NSString *substring);
+static void ABMAXTryForceUnityAdsRewardedDelegateCompletion(void);
 
 /// 同じ内容のインストールログを繰り返し出さないようにする。dyldの新規イメージロードのたびに
 /// インストール処理全体が再実行される(ABConstructor.m参照)ため、素朴に毎回ログを出すと
@@ -67,6 +78,22 @@ static void AB_NoOp_WithArgArgArg(id self, SEL _cmd, id arg1, id arg2, id arg3) 
 #pragma mark - リワード付与ヘルパー(広告を見た体でSDKに結果を通知し、ゲーム側の続行を可能にする)
 #pragma mark   ユーザー自身が遊ぶための広告ブロッカーであり、広告を見ずに機能を使えることが目的のため、
 #pragma mark   報酬は成功扱いにする(不正な第三者への報酬付与ではなく、自分自身の環境のみに閉じる)。
+
+/// delegateの実クラス名から、それがアプリ自身の実装ではなくAppLovin MAX自前の
+/// メディエーションアダプタ用ブリッジクラスかどうかを判定する。実機確認済みの例:
+/// ALByteDanceRewardedVideoAdDelegate(Pangle)、ALUnityAdsRewardedDelegate(Unity Ads)、
+/// AppLovinMediationMolocoAdapter.MolocoRewardedAdapterDelegate(Moloco)。これらは
+/// 各SDK公式ドキュメント通りのdelegateプロトコル名を一切実装していないことが実機で
+/// 判明しており、ブロック+偽delegate通知では報酬はおろかゲームが広告完了コールバックを
+/// 待ち続けてフリーズする(tokyo.plott.tesのMolocoで実機確認)。この場合はブロックせず
+/// 元の実装に任せ、MAUnityAdManager.didDisplayAd:フックに処理を委ねる必要がある。
+static BOOL ABDelegateLooksLikeMAXBridge(id delegate) {
+    if (!delegate) {
+        return NO;
+    }
+    NSString *className = NSStringFromClass([delegate class]);
+    return [className hasPrefix:@"AL"] || [className rangeOfString:@"AppLovin"].location != NSNotFound;
+}
 
 /// self.delegateを安全に取得する(delegateの型はSDKごとに異なるため素朴にrespondsToSelector:で
 /// チェックしてから呼ぶ)。取得の成否・delegateの実クラス名を診断ログに残す。
@@ -144,6 +171,50 @@ static void ABCallDelegate1ThenBool(id delegate, SEL sel, id arg1, BOOL arg2) {
     inv.target = delegate;
     [inv setArgument:&arg1 atIndex:2];
     [inv setArgument:&arg2 atIndex:3];
+    [inv invoke];
+}
+
+/// 引数の意味・個数は分かっているが型が不明なセレクタを、実行時のメソッド型エンコーディング
+/// (methodSignatureForSelector:)に従って全引数nil/0で埋めて安全に呼ぶ。objc_msgSendへの
+/// 単純キャストは引数の実際の型(BOOL/NSInteger/構造体等)を事前に知らないと正しく呼べないが、
+/// NSInvocationを使えば実行時に取得した型に従って正しくレジスタへ値を積めるため、AppLovin内部の
+/// 非公開API(ALUnityAdsRewardedDelegateのshowDidStart:等)のような、ドキュメント化されていない
+/// メソッドでも引数の型を推測せずに安全に叩ける。構造体のように8バイトを超える引数が来た場合は
+/// ゼロ埋め用バッファを超えて読み取られる危険があるため、呼び出し自体を中止する。
+static void ABCallSelectorWithZeroFilledArgs(id delegate, SEL sel) {
+    if (!delegate) {
+        return;
+    }
+    if (![delegate respondsToSelector:sel]) {
+        ABDebugLog(@"[AUTOCLOSE] %@ does not respond to %@", NSStringFromClass([delegate class]), NSStringFromSelector(sel));
+        return;
+    }
+    NSMethodSignature *sig = [delegate methodSignatureForSelector:sel];
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    inv.selector = sel;
+    inv.target = delegate;
+    NSUInteger argCount = sig.numberOfArguments;
+    id nilObj = nil;
+    SEL nilSel = nil;
+    long long zero = 0;
+    for (NSUInteger i = 2; i < argCount; i++) {
+        const char *argType = [sig getArgumentTypeAtIndex:i];
+        char firstChar = argType[0];
+        if (firstChar == '@' || firstChar == '#') {
+            [inv setArgument:&nilObj atIndex:(NSInteger)i];
+        } else if (firstChar == ':') {
+            [inv setArgument:&nilSel atIndex:(NSInteger)i];
+        } else {
+            NSUInteger size = 0;
+            NSGetSizeAndAlignment(argType, &size, NULL);
+            if (size > sizeof(zero)) {
+                ABDebugLog(@"[AUTOCLOSE] %@ arg %lu type \"%s\" too large (%lu bytes) to zero-fill safely, skipping call", NSStringFromSelector(sel), (unsigned long)i, argType, (unsigned long)size);
+                return;
+            }
+            [inv setArgument:&zero atIndex:(NSInteger)i];
+        }
+    }
+    ABDebugLog(@"[AUTOCLOSE] calling %@ on %@ (zero/nil-filled args)", NSStringFromSelector(sel), NSStringFromClass([delegate class]));
     [inv invoke];
 }
 
@@ -234,6 +305,53 @@ static void ABInstallMAUnityAdManagerCaptureHook(void) {
     }
 }
 
+/// `didRewardUserForAd:withReward:`のreward引数用に、AppLovin MAX公式ヘッダ上の
+/// `MAReward`(実体は`MALabeledValue`のtypedef、label/amountのreadonlyプロパティのみを
+/// 持つ素のValueオブジェクト)の空インスタンスを生成する。これまでnilを渡していたが、
+/// tokyo.plott.tesで「見た体」の報酬がゲーム側に反映されない不具合が見つかった。
+/// MAUnityAdManagerの実装がUnity C#側へreward.amount/reward.labelを転送しており、
+/// ゲーム側がamount==0(nilへのメッセージ送信で安全に返るデフォルト値)を「無効な報酬」
+/// として無視している可能性が高い。レシーバがnilではなく実在のオブジェクトであれば
+/// 読み取られる値自体は0のままでも、"rewardがnilかどうか"のチェックだけは通過できる
+/// ことを期待した対策。designated initializerの制約でクラッシュする可能性があるため
+/// @try/@catchで保護し、失敗時はnilにフォールバックする(従来の挙動のまま)。
+static id ABMAXMakeFallbackReward(void) {
+    NSArray<NSString *> *candidateClassNames = @[@"MAReward", @"MALabeledValue"];
+    for (NSString *className in candidateClassNames) {
+        Class cls = NSClassFromString(className);
+        if (!cls) {
+            continue;
+        }
+        @try {
+            id instance = [[cls alloc] init];
+            if (instance) {
+                ABDebugLog(@"[REWARD]   fallback reward instance: %@", className);
+                return instance;
+            }
+        } @catch (NSException *exception) {
+            ABDebugLog(@"[REWARD]   %@ alloc/init threw %@: %@", className, exception.name, exception.reason);
+        }
+    }
+    return nil;
+}
+
+/// capturedAd(実クラスALMediatedFullscreenAd)が保持する`ALAtomicBoolean`型のフラグ
+/// (didRewardUserCalled/cancelRewardTask/didReportUserNotRewarded等)を強制的にセットする。
+/// `-set:`(BOOL)を実機のメソッドダンプで確認済み。SDK内部が`didRewardUserForAd:withReward:`
+/// 呼び出し前にこれらのフラグの整合性を検証している可能性があるため、delegateへの通知前に
+/// 「視聴完了・キャンセルなし・未報告」の状態を明示的に作る。
+static void ABMAXForceAtomicFlag(id capturedAd, SEL propertySelector, BOOL value) {
+    if (!capturedAd || ![capturedAd respondsToSelector:propertySelector]) {
+        return;
+    }
+    id flag = ((id (*)(id, SEL))objc_msgSend)(capturedAd, propertySelector);
+    if (!flag || ![flag respondsToSelector:@selector(set:)]) {
+        return;
+    }
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(flag, @selector(set:), value);
+    ABDebugLog(@"[REWARD]   forced %@.set:%@", NSStringFromSelector(propertySelector), value ? @"YES" : @"NO");
+}
+
 /// AppLovin MAX系(MAAdDelegate/MARewardedAdDelegate)。表示成功→(報酬)→非表示を順に通知する。
 /// ad引数は可能な限り本物のMAAdインスタンス(事前にロード済みならキャプチャ済み)を使う。
 static void ABNotifyMAXDelegate(id self, BOOL grantReward) {
@@ -241,9 +359,69 @@ static void ABNotifyMAXDelegate(id self, BOOL grantReward) {
     NSString *formatKey = ABMAXFormatKeyForInstance(self);
     id capturedAd = (formatKey && ABMAXLastLoadedAdByFormatKey) ? [ABMAXLastLoadedAdByFormatKey objectForKey:formatKey] : nil;
     ABDebugLog(@"[REWARD]   formatKey=%@ capturedAd=%@", formatKey, capturedAd ? @"found" : @"nil(fallback)");
+    if (grantReward && delegate) {
+        // tokyo.plott.tes調査用: didDisplayAd:/didRewardUserForAd:withReward:/didHideAd:を
+        // 全てrespondsToSelector:=YESで呼べているのに報酬がゲーム側に反映されない不具合が
+        // あったため、delegate(MAUnityAdManager)・capturedAdの実クラス・MARewardの構造を
+        // 1回だけ詳細ダンプする。capturedAdの実クラスはALMediatedFullscreenAdで、
+        // pendingReward(ALPendingReward型)/cancelRewardTask・didRewardUserCalled・
+        // cancelRewardValidationTask(いずれもALAtomicBoolean型)という、非同期のリワード
+        // 検証タスクを示唆するプロパティを持っていることが判明したため、それらの構造も調べる。
+        static dispatch_once_t maxIntrospectionOnceToken;
+        dispatch_once(&maxIntrospectionOnceToken, ^{
+            ABLogAllMethods(NSStringFromClass([delegate class]));
+            ABLogAllProperties(NSStringFromClass([delegate class]));
+            ABLogAllIvars(NSStringFromClass([delegate class]));
+            if (capturedAd) {
+                ABLogAllProperties(NSStringFromClass([capturedAd class]));
+                if ([capturedAd respondsToSelector:@selector(pendingReward)]) {
+                    id pendingReward = ((id (*)(id, SEL))objc_msgSend)(capturedAd, @selector(pendingReward));
+                    ABDebugLog(@"[REWARD]   capturedAd.pendingReward = %@", pendingReward ? NSStringFromClass([pendingReward class]) : @"nil");
+                    if (pendingReward) {
+                        ABLogAllMethods(NSStringFromClass([pendingReward class]));
+                        ABLogAllProperties(NSStringFromClass([pendingReward class]));
+                    }
+                }
+                if ([capturedAd respondsToSelector:@selector(didRewardUserCalled)]) {
+                    id flag = ((id (*)(id, SEL))objc_msgSend)(capturedAd, @selector(didRewardUserCalled));
+                    ABDebugLog(@"[REWARD]   capturedAd.didRewardUserCalled = %@", flag ? NSStringFromClass([flag class]) : @"nil");
+                    if (flag) {
+                        ABLogAllMethods(NSStringFromClass([flag class]));
+                    }
+                }
+                if ([capturedAd respondsToSelector:@selector(cancelRewardTask)]) {
+                    id flag = ((id (*)(id, SEL))objc_msgSend)(capturedAd, @selector(cancelRewardTask));
+                    ABDebugLog(@"[REWARD]   capturedAd.cancelRewardTask = %@", flag ? NSStringFromClass([flag class]) : @"nil");
+                }
+            }
+        });
+    }
     ABCallDelegate1(delegate, NSSelectorFromString(@"didDisplayAd:"), capturedAd);
     if (grantReward) {
-        ABCallDelegate2(delegate, NSSelectorFromString(@"didRewardUserForAd:withReward:"), capturedAd, nil);
+        // tokyo.plott.tesで本物の広告再生をパススルーして実機観察した結果、本物のフローは
+        // 常にdidDisplayAd: -> didClickAd: -> didRewardUserForAd:withReward: -> didHideAd:
+        // の順だった(reward.label/amountは本物でも空・0で、我々の偽装値と一致していたため
+        // reward引数自体は原因ではなかった)。didClickAd:を一切呼んでいなかったのが欠けていた
+        // 可能性が高いため追加する。
+        ABCallDelegate1(delegate, NSSelectorFromString(@"didClickAd:"), capturedAd);
+        id reward = ABMAXMakeFallbackReward();
+        // capturedAdがSDK内部に「本物の」pendingReward(ALPendingReward)を保持している場合、
+        // 空のMARewardより先にこちらを優先して使う(label/amountが実際の値を持つ可能性が
+        // 高いため)。pendingRewardがMAReward/MALabeledValue互換のプロトコルを実装していると
+        // は限らないが、didRewardUserForAd:withReward:の型チェックが緩ければ通る可能性がある。
+        if (capturedAd && [capturedAd respondsToSelector:@selector(pendingReward)]) {
+            id realPendingReward = ((id (*)(id, SEL))objc_msgSend)(capturedAd, @selector(pendingReward));
+            if (realPendingReward) {
+                reward = realPendingReward;
+            }
+        }
+        // SDK内部のリワード検証タスク関連フラグを「視聴完了・キャンセルなし・未報告」の
+        // 状態に強制してからdelegateへ通知する。capturedAdがALMediatedFullscreenAdでない
+        // 場合やこれらのプロパティを持たない場合はrespondsToSelector:チェックで安全に無視される。
+        ABMAXForceAtomicFlag(capturedAd, @selector(cancelRewardTask), NO);
+        ABMAXForceAtomicFlag(capturedAd, @selector(didReportUserNotRewarded), NO);
+        ABMAXForceAtomicFlag(capturedAd, @selector(didRewardUserCalled), YES);
+        ABCallDelegate2(delegate, NSSelectorFromString(@"didRewardUserForAd:withReward:"), capturedAd, reward);
     }
     ABCallDelegate1(delegate, NSSelectorFromString(@"didHideAd:"), capturedAd);
 }
@@ -271,6 +449,347 @@ static void AB_MAX_ShowAdForPlacement_NoReward(id self, SEL _cmd, id placement) 
 static void AB_MAX_ShowAdForPlacementCustomData_NoReward(id self, SEL _cmd, id placement, id customData) {
     ABLogBlocked(self, _cmd);
     ABNotifyMAXDelegate(self, NO);
+}
+
+#pragma mark - AppLovin MAX MARewardedAd: 表示→自動クローズ方式(tokyo.plott.tes対応)
+#pragma mark   ALMediatedFullscreenAdが持つadViewControllerObserverDelaySeconds等のプロパティ
+#pragma mark   から、SDKはshow呼び出し後「実際に広告ViewControllerが画面に現れたか」を別途
+#pragma mark   タイマーで監視しており、show自体を完全にブロックしてしまうとこの監視に
+#pragma mark   引っかかり、一定時間後に「広告の取得に失敗しました」という表示とともに
+#pragma mark   didFailToDisplayAd:withError:相当の失敗処理に倒れ、報酬も付与されないことが
+#pragma mark   実機で判明した(delegateへの偽装通知だけでは通らない)。そのためMARewardedAdに
+#pragma mark   限り、showはブロックせず元の実装に任せ、SDK自身がdidDisplayAd:を呼んだ直後に
+#pragma mark   広告ViewControllerを自動で閉じる方式に切り替える。
+
+/// handleCloseButtonに応答すればそれを呼び(SDK正規の「閉じるボタンが押された」ハンドラ)、
+/// なければdismissViewControllerAnimated:にフォールバックする。既に画面から外れていれば
+/// (view.windowがnil)何もしない。AVPlayerシークが使えないクラス(プレイアブル等)や、
+/// シーク後のフォールバックとして使う。
+static void ABMAXCloseIfStillPresented(UIViewController *top) {
+    if (!top.isViewLoaded || !top.view.window) {
+        ABDebugLog(@"[AUTOCLOSE] %@ already dismissed, nothing to do", NSStringFromClass([top class]));
+        return;
+    }
+    SEL closeButtonSel = NSSelectorFromString(@"handleCloseButton");
+    if ([top respondsToSelector:closeButtonSel]) {
+        ABDebugLog(@"[AUTOCLOSE] calling handleCloseButton on %@", NSStringFromClass([top class]));
+        ((void (*)(id, SEL))objc_msgSend)(top, closeButtonSel);
+    } else {
+        ABDebugLog(@"[AUTOCLOSE] dismissing %@", NSStringFromClass([top class]));
+        [top dismissViewControllerAnimated:NO completion:^{
+            ABDebugLog(@"[AUTOCLOSE] dismiss completion called");
+        }];
+    }
+}
+
+/// ALBaseVideoViewControllerの実機ダンプ(tokyo.plott.tes)で、SDK自身が「完全視聴」を
+/// 表すフラグ群(wasPlayedToEnd/adViewFullyWatched/treatAdAsFullyWatched)と、それらを
+/// もとに実際に報酬報告処理をスケジュールする-scheduleReportRewardTaskIfNeededを発見した。
+/// handleCloseButton/強制dismiss/AVPlayerシークは全て「外側から閉じる・再生させる」操作に
+/// 過ぎず、SDK自身の報酬報告ロジック(ALMediatedFullscreenAdのcancelRewardTask等と対になる
+/// 内部実装)を一度も直接起動していなかった可能性がある。そこでこれらのフラグを強制し、
+/// scheduleReportRewardTaskIfNeededを直接呼んで、SDKに「視聴完了」と判断させる。
+/// avPlayer経由のシークはtokyo.plott.tesの広告(HTML/MRAIDテンプレート内の<video>タグを
+/// WKWebViewが再生しており、ALBaseVideoViewController自身のavPlayerは毎回nil)では
+/// 機能しなかったため、この方式に置き換えた。
+static void ABMAXForceRewardCompletionIfPossible(UIViewController *top) {
+    SEL setWasPlayedToEndSel = NSSelectorFromString(@"setWasPlayedToEnd:");
+    SEL setAdViewFullyWatchedSel = NSSelectorFromString(@"setAdViewFullyWatched:");
+    SEL setTreatAdAsFullyWatchedSel = NSSelectorFromString(@"setTreatAdAsFullyWatched:");
+    SEL scheduleReportRewardSel = NSSelectorFromString(@"scheduleReportRewardTaskIfNeeded");
+
+    if ([top respondsToSelector:setWasPlayedToEndSel]) {
+        ABDebugLog(@"[AUTOCLOSE] setWasPlayedToEnd:YES on %@", NSStringFromClass([top class]));
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(top, setWasPlayedToEndSel, YES);
+    }
+    if ([top respondsToSelector:setAdViewFullyWatchedSel]) {
+        ABDebugLog(@"[AUTOCLOSE] setAdViewFullyWatched:YES on %@", NSStringFromClass([top class]));
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(top, setAdViewFullyWatchedSel, YES);
+    }
+    if ([top respondsToSelector:setTreatAdAsFullyWatchedSel]) {
+        ABDebugLog(@"[AUTOCLOSE] setTreatAdAsFullyWatched:YES on %@", NSStringFromClass([top class]));
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(top, setTreatAdAsFullyWatchedSel, YES);
+    }
+    if ([top respondsToSelector:scheduleReportRewardSel]) {
+        ABDebugLog(@"[AUTOCLOSE] calling scheduleReportRewardTaskIfNeeded on %@", NSStringFromClass([top class]));
+        ((void (*)(id, SEL))objc_msgSend)(top, scheduleReportRewardSel);
+    } else {
+        ABDebugLog(@"[AUTOCLOSE] %@ does not respond to scheduleReportRewardTaskIfNeeded", NSStringFromClass([top class]));
+    }
+}
+
+/// 本物のAVPlayerに直接アクセスできる場合(ALBaseVideoViewController系)のみの追加施策。
+/// tokyo.plott.tesの実機では毎回nilだった(HTML/MRAIDテンプレート広告のため)が、他の
+/// 広告フォーマットでは効く可能性があるため残す。成功すればYESを返す。
+static BOOL ABMAXTrySeekVideoNearEndAndClose(UIViewController *top) {
+    if (![top respondsToSelector:@selector(avPlayer)]) {
+        return NO;
+    }
+    id playerObj = ((id (*)(id, SEL))objc_msgSend)(top, @selector(avPlayer));
+    if (![playerObj isKindOfClass:[AVPlayer class]]) {
+        ABDebugLog(@"[AUTOCLOSE] avPlayer is not AVPlayer: %@", playerObj ? NSStringFromClass([playerObj class]) : @"nil");
+        return NO;
+    }
+    AVPlayer *player = (AVPlayer *)playerObj;
+    AVPlayerItem *item = player.currentItem;
+    CMTime duration = item ? item.duration : kCMTimeInvalid;
+    if (!item || !CMTIME_IS_VALID(duration) || CMTimeGetSeconds(duration) <= 0) {
+        ABDebugLog(@"[AUTOCLOSE] avPlayer.currentItem.duration not ready yet");
+        return NO;
+    }
+    double durationSeconds = CMTimeGetSeconds(duration);
+    double backOffSeconds = MIN(0.3, durationSeconds * 0.1);
+    CMTime nearEnd = CMTimeSubtract(duration, CMTimeMakeWithSeconds(backOffSeconds, duration.timescale));
+    ABDebugLog(@"[AUTOCLOSE] seeking AVPlayer to near end (duration=%.2fs)", durationSeconds);
+    [player seekToTime:nearEnd toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL finished) {
+        ABDebugLog(@"[AUTOCLOSE] seek finished=%@, resuming playback", finished ? @"YES" : @"NO");
+        [player play];
+        // 動画終了検知・報酬タイマーが走る時間を見込んで少し待ってから、まだ広告が
+        // 画面に残っていればフォールバックでhandleCloseButton/dismissを呼ぶ。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            ABMAXCloseIfStillPresented(top);
+        });
+    }];
+    return YES;
+}
+
+/// キーウィンドウの最前面にpresentされているViewControllerを探して閉じる。
+/// 広告show直後というタイミングの前提で、通常はそれが広告のViewControllerのはず。
+static void ABMAXAutoDismissPresentedViewController(void) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    NSArray<UIWindow *> *windows = [UIApplication sharedApplication].windows;
+#pragma clang diagnostic pop
+    UIWindow *keyWindow = nil;
+    for (UIWindow *window in windows) {
+        if (window.isKeyWindow) {
+            keyWindow = window;
+            break;
+        }
+    }
+    if (!keyWindow) {
+        keyWindow = windows.firstObject;
+    }
+    UIViewController *root = keyWindow.rootViewController;
+    UIViewController *top = root;
+    while (top.presentedViewController) {
+        top = top.presentedViewController;
+    }
+    if (top && top != root) {
+        // tokyo.plott.tes調査用: 強制dismissだけでは「早期スキップ」とみなされ報酬が付与
+        // されないと実機で判明したため、まずdismiss対象のViewController(映像広告なら
+        // ALAppLovinVideoViewController)の内部構造を1回だけダンプし、AVPlayer等を
+        // 直接操作して動画終端までシークする手段がないか調査する。
+        // dispatch_onceだと最初に表示された広告フォーマット(プレイアブル等)のクラスでしか
+        // 診断が走らず、2回目以降の別フォーマット(映像広告のALAppLovinVideoViewController等)
+        // を取りこぼすと判明したため、クラス名ごとに1回だけ診断する方式に変更する。
+        static NSMutableSet<NSString *> *introspectedClassNames;
+        static dispatch_once_t introspectedSetOnceToken;
+        dispatch_once(&introspectedSetOnceToken, ^{
+            introspectedClassNames = [NSMutableSet set];
+        });
+        NSString *topClassName = NSStringFromClass([top class]);
+        BOOL alreadyIntrospected;
+        @synchronized (introspectedClassNames) {
+            alreadyIntrospected = [introspectedClassNames containsObject:topClassName];
+            if (!alreadyIntrospected) {
+                [introspectedClassNames addObject:topClassName];
+            }
+        }
+        if (!alreadyIntrospected) {
+            ABLogAllMethods(topClassName);
+            ABLogAllProperties(topClassName);
+            ABLogAllIvars(topClassName);
+            // handleCloseButtonを呼んでも報酬が付与されなかったため、動画再生の実体を
+            // 持っていそうな継承元クラスとcurrentAd(ALAdServerAd、広告データ本体)の構造も
+            // 追加で調べる。
+            Class superCls = class_getSuperclass([top class]);
+            if (superCls) {
+                NSString *superName = NSStringFromClass(superCls);
+                ABDebugLog(@"[SCAN] %@ superclass = %@", topClassName, superName);
+                ABLogAllMethods(superName);
+                ABLogAllProperties(superName);
+                ABLogAllIvars(superName);
+            }
+            if ([top respondsToSelector:@selector(currentAd)]) {
+                id currentAd = ((id (*)(id, SEL))objc_msgSend)(top, @selector(currentAd));
+                if (currentAd) {
+                    NSString *adClassName = NSStringFromClass([currentAd class]);
+                    ABDebugLog(@"[SCAN] currentAd class = %@", adClassName);
+                    ABLogAllMethods(adClassName);
+                    ABLogAllProperties(adClassName);
+                }
+            }
+            // プレイアブル広告(UnityAds.WebViewContainerViewController)はそれ自体が
+            // ほぼ空の薄いコンテナで、scheduleReportRewardTaskIfNeeded相当のメソッドを
+            // 持たない。実際のWebView(VIEWDUMPで確認済みのUnityAds.ViewStateObservableWebView)
+            // と、その時点でロード済みのUnityAds関連クラス一式を追加で調べ、報酬報告の
+            // 実体(ブリッジ/リスナー等)がどこにあるか手がかりを探す。
+            if ([topClassName rangeOfString:@"WebViewContainer"].location != NSNotFound) {
+                ABLogClassesContainingSubstringNow(@"UnityAds");
+                UIView *webView = ABFindSubviewClassNameContaining(top.view, @"WebView");
+                if (webView) {
+                    NSString *webViewClassName = NSStringFromClass([webView class]);
+                    ABDebugLog(@"[SCAN] playable webview instance class = %@", webViewClassName);
+                    ABLogAllMethods(webViewClassName);
+                    ABLogAllProperties(webViewClassName);
+                    ABLogAllIvars(webViewClassName);
+                } else {
+                    ABDebugLog(@"[SCAN] no WebView-named subview found under %@", topClassName);
+                }
+            }
+        }
+        // まずSDK自身の「完全視聴」フラグ群を強制し、scheduleReportRewardTaskIfNeededを
+        // 直接呼んで報酬報告処理そのものを起動する(上記ABMAXForceRewardCompletionIfPossible
+        // 参照)。avPlayerが使える広告フォーマットならシークも追加で試す。
+        ABMAXForceRewardCompletionIfPossible(top);
+        // プレイアブル(UnityAds.WebViewContainerViewController)は上記のVC自身の
+        // フラグ・メソッドを一切持たないため、代わりにinitializerフックで捕まえておいた
+        // ALUnityAdsRewardedDelegateへ直接showDidReceiveReward:等を送り込む。
+        if ([topClassName rangeOfString:@"WebViewContainer"].location != NSNotFound) {
+            ABMAXTryForceUnityAdsRewardedDelegateCompletion();
+        }
+        if (!ABMAXTrySeekVideoNearEndAndClose(top)) {
+            // scheduleReportRewardTaskIfNeededが内部でタイマー(reportRewardTimer)を
+            // 使っている可能性があるため、即座に閉じず少し待つ。早すぎるcloseは
+            // ALMediatedFullscreenAd側のcancelRewardTaskを誘発し、せっかく起動した
+            // 報酬報告を取り消してしまう懸念がある。
+            ABDebugLog(@"[AUTOCLOSE] waiting for reward report to settle before closing %@", NSStringFromClass([top class]));
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                ABMAXCloseIfStillPresented(top);
+            });
+        }
+    } else {
+        ABDebugLog(@"[AUTOCLOSE] no presented view controller found to dismiss");
+    }
+}
+
+static IMP ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP = NULL;
+/// MAUnityAdManager(アプリ側=Unity Plugin自身が実装するdelegate)のdidDisplayAd:を横取りし、
+/// SDK自身が「表示開始」を認識した直後に自動クローズをスケジュールする。SDK自身の表示処理
+/// (ViewControllerのpresent)は妨げないため、タイミング監視には正しく捕捉される。
+static void AB_MAUnityAdManager_didDisplayAd_AutoClose(id self, SEL _cmd, id ad) {
+    ABDebugLog(@"[AUTOCLOSE] MAUnityAdManager didDisplayAd: ad=%@ -> scheduling auto-dismiss", ad ? NSStringFromClass([ad class]) : @"nil");
+    if (ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP) {
+        ((void (*)(id, SEL, id))ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP)(self, _cmd, ad);
+    }
+    // プレイアブル(UnityAds.WebViewContainerViewController)は映像広告のALBaseVideoViewController
+    // と違い、報酬報告メソッドを自分自身で持っていない。実機のクラス一覧スキャンで
+    // ALUnityAdsRewardedDelegate(AppLovin MAX自前のUnity Adsメディエーションアダプタ
+    // delegate、Pangle用のALByteDanceRewardedVideoAdDelegateと同系統)を発見したため、
+    // その構造(本物のUnityAdsShowDelegateプロトコルメソッド名)を調べる。あわせて
+    // ad引数(ALMediatedFullscreenAd)自体がこのdelegateへの参照をivarとして保持して
+    // いないかも1回だけ調べ、保持していれば直接completion系メソッドを呼べないか探る。
+    ABLogAllMethods(@"ALUnityAdsRewardedDelegate");
+    ABLogAllProperties(@"ALUnityAdsRewardedDelegate");
+    ABLogAllIvars(@"ALUnityAdsRewardedDelegate");
+    if (ad) {
+        static NSMutableSet<NSString *> *introspectedAdClassNames;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            introspectedAdClassNames = [NSMutableSet set];
+        });
+        NSString *adClassName = NSStringFromClass([ad class]);
+        BOOL already;
+        @synchronized (introspectedAdClassNames) {
+            already = [introspectedAdClassNames containsObject:adClassName];
+            if (!already) {
+                [introspectedAdClassNames addObject:adClassName];
+            }
+        }
+        if (!already) {
+            ABDebugLog(@"[SCAN] ad (didDisplayAd: argument) class = %@", adClassName);
+            ABLogAllIvars(adClassName);
+            ABLogAllProperties(adClassName);
+        }
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        ABMAXAutoDismissPresentedViewController();
+    });
+}
+
+static IMP ABOriginalMARewardedAdShowAdIMP = NULL;
+static IMP ABOriginalMARewardedAdShowAdForPlacementIMP = NULL;
+static IMP ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP = NULL;
+static void AB_MARewardedAd_ShowAd_Passthrough(id self, SEL _cmd) {
+    ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAd PASSTHROUGH(表示後に自動クローズ)");
+    if (ABOriginalMARewardedAdShowAdIMP) {
+        ((void (*)(id, SEL))ABOriginalMARewardedAdShowAdIMP)(self, _cmd);
+    }
+}
+static void AB_MARewardedAd_ShowAdForPlacement_Passthrough(id self, SEL _cmd, id placement) {
+    ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAdForPlacement: PASSTHROUGH placement=%@", placement);
+    if (ABOriginalMARewardedAdShowAdForPlacementIMP) {
+        ((void (*)(id, SEL, id))ABOriginalMARewardedAdShowAdForPlacementIMP)(self, _cmd, placement);
+    }
+}
+static void AB_MARewardedAd_ShowAdForPlacementCustomData_Passthrough(id self, SEL _cmd, id placement, id customData) {
+    ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAdForPlacement:customData: PASSTHROUGH placement=%@ customData=%@", placement, customData);
+    if (ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP) {
+        ((void (*)(id, SEL, id, id))ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP)(self, _cmd, placement, customData);
+    }
+}
+
+/// ALUnityAdsRewardedDelegate(AppLovin MAX自前のUnity Adsメディエーションアダプタ用delegate、
+/// 実機ダンプで-showDidStart:/-showDidClick:/-showDidReceiveReward:/-showDidComplete:with:/
+/// -showDidFail:error:を発見済み)の生きたインスタンスを、initializer
+/// -initWithParentAdapter:andNotify:をフックして捕まえておく。プレイアブル広告
+/// (UnityAds.WebViewContainerViewController)はALBaseVideoViewControllerのような
+/// 自前の報酬報告メソッドを持たないため、代わりにこのdelegateへ直接showDidReceiveReward:等を
+/// 送り込んで報酬を成立させる。1個の広告フローにつき1個のインスタンスという前提で、
+/// 直近1個だけを強参照で保持する(複数の広告が同時に飛ぶことは想定していない)。
+static id ABCapturedUnityAdsRewardedDelegate = nil;
+
+static IMP ABOriginalALUnityAdsRewardedDelegateInitIMP = NULL;
+static id AB_ALUnityAdsRewardedDelegate_initWithParentAdapter_andNotify(id self, SEL _cmd, id parentAdapter, id notify) {
+    id result = self;
+    if (ABOriginalALUnityAdsRewardedDelegateInitIMP) {
+        result = ((id (*)(id, SEL, id, id))ABOriginalALUnityAdsRewardedDelegateInitIMP)(self, _cmd, parentAdapter, notify);
+    }
+    ABDebugLog(@"[AUTOCLOSE] captured ALUnityAdsRewardedDelegate instance (parentAdapter=%@)", parentAdapter ? NSStringFromClass([parentAdapter class]) : @"nil");
+    ABCapturedUnityAdsRewardedDelegate = result;
+    return result;
+}
+
+/// 直前に捕まえたALUnityAdsRewardedDelegateに対し、showDidStart:→showDidReceiveReward:→
+/// showDidComplete:with:の順で送る。各セレクタの引数の実際の型は不明だが
+/// ABCallSelectorWithZeroFilledArgsが実行時のメソッド型エンコーディングに従って安全に
+/// nil/0埋めするため、構造体のような想定外の大きい型でない限り安全に呼べる。
+/// showDidClick:(クリックイベント)は、実際にクリックしていないのに広告ネットワーク側の
+/// クリック計測を汚すことになるため、意図的に呼ばない。
+static void ABMAXTryForceUnityAdsRewardedDelegateCompletion(void) {
+    if (!ABCapturedUnityAdsRewardedDelegate) {
+        ABDebugLog(@"[AUTOCLOSE] no captured ALUnityAdsRewardedDelegate instance to force-complete");
+        return;
+    }
+    ABCallSelectorWithZeroFilledArgs(ABCapturedUnityAdsRewardedDelegate, NSSelectorFromString(@"showDidStart:"));
+    ABCallSelectorWithZeroFilledArgs(ABCapturedUnityAdsRewardedDelegate, NSSelectorFromString(@"showDidReceiveReward:"));
+    ABCallSelectorWithZeroFilledArgs(ABCapturedUnityAdsRewardedDelegate, NSSelectorFromString(@"showDidComplete:with:"));
+}
+
+static void ABInstallMAXRewardedAutoClose(void) {
+    Class rewardedCls = NSClassFromString(@"MARewardedAd");
+    ABLogSwizzle(@"MARewardedAd.showAd (auto-close mode)",
+                 ABSwizzleInstanceMethodKeepingOriginal(rewardedCls, NSSelectorFromString(@"showAd"), (IMP)AB_MARewardedAd_ShowAd_Passthrough, kTypesVoid, &ABOriginalMARewardedAdShowAdIMP));
+    ABLogSwizzle(@"MARewardedAd.showAdForPlacement: (auto-close mode)",
+                 ABSwizzleInstanceMethodKeepingOriginal(rewardedCls, NSSelectorFromString(@"showAdForPlacement:"), (IMP)AB_MARewardedAd_ShowAdForPlacement_Passthrough, kTypesArg, &ABOriginalMARewardedAdShowAdForPlacementIMP));
+    ABLogSwizzle(@"MARewardedAd.showAdForPlacement:customData: (auto-close mode)",
+                 ABSwizzleInstanceMethodKeepingOriginal(rewardedCls, NSSelectorFromString(@"showAdForPlacement:customData:"), (IMP)AB_MARewardedAd_ShowAdForPlacementCustomData_Passthrough, kTypesArgArg, &ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP));
+
+    Class delegateCls = NSClassFromString(@"MAUnityAdManager");
+    if (delegateCls) {
+        ABLogSwizzle(@"MAUnityAdManager.didDisplayAd: (auto-close hook)",
+                     ABSwizzleInstanceMethodKeepingOriginal(delegateCls, NSSelectorFromString(@"didDisplayAd:"), (IMP)AB_MAUnityAdManager_didDisplayAd_AutoClose, kTypesArg, &ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP));
+    }
+
+    // プレイアブル広告のUnity Ads経路用。-initWithParentAdapter:andNotify:はshow呼び出しより
+    // 前に実行される(リスナーのセットアップ)ため、ここで早めにフックしておく必要がある
+    // (didDisplayAd:が発火してから初めてフックしても、そのインスタンスはもう作られた後で遅い)。
+    Class unityDelegateCls = NSClassFromString(@"ALUnityAdsRewardedDelegate");
+    if (unityDelegateCls) {
+        ABLogSwizzle(@"ALUnityAdsRewardedDelegate.initWithParentAdapter:andNotify: (capture)",
+                     ABSwizzleInstanceMethodKeepingOriginal(unityDelegateCls, NSSelectorFromString(@"initWithParentAdapter:andNotify:"), (IMP)AB_ALUnityAdsRewardedDelegate_initWithParentAdapter_andNotify, kTypesIdArgArg, &ABOriginalALUnityAdsRewardedDelegateInitIMP));
+    }
 }
 
 /// Google AdMob GADRewardedAd。ブロックを直接引数で受け取るのでdelegate探索は不要、
@@ -357,11 +876,48 @@ static void ABNotifyMolocoDelegate(id self) {
     ABCallDelegate1(rewardedDelegate, NSSelectorFromString(@"didHide:"), nil);
     ABCallDelegate1(interstitialDelegate, NSSelectorFromString(@"didHide:"), nil);
 }
+/// tokyo.plott.tesの実機検証で、MolocoSDK.PublisherFullscreenAdがAppLovin MAXの
+/// Molocoメディエーションアダプタ経由で使われているケース(rewardedDelegateの実クラスが
+/// "AppLovinMediationMolocoAdapter.MolocoRewardedAdapterDelegate")を確認した。この場合
+/// Moloco公式ドキュメント通りのdelegateプロトコル名(didRewardUser:/didHide:)を一切
+/// 実装しておらず、ブロック+偽delegate通知では報酬が付与されないどころか、実際の広告が
+/// 一切表示されないままゲーム側が広告完了コールバックを待ち続け、UIがフリーズする不具合が
+/// 実機で発生した(BGMは鳴り続けるがタップに無反応になる症状と一致)。この場合はブロック
+/// せず元の実装に任せ、MAUnityAdManager.didDisplayAd:フックに処理を委ねる。それ以外
+/// (アプリ自身のMoloco SDK直接利用)は従来通りブロック+偽delegate通知を使う。
+static BOOL ABMolocoShouldPassthrough(id self) {
+    id rewardedDelegate = nil;
+    if ([self respondsToSelector:@selector(rewardedDelegate)]) {
+        rewardedDelegate = ((id (*)(id, SEL))objc_msgSend)(self, @selector(rewardedDelegate));
+    }
+    id interstitialDelegate = nil;
+    if ([self respondsToSelector:@selector(interstitialDelegate)]) {
+        interstitialDelegate = ((id (*)(id, SEL))objc_msgSend)(self, @selector(interstitialDelegate));
+    }
+    return ABDelegateLooksLikeMAXBridge(rewardedDelegate) || ABDelegateLooksLikeMAXBridge(interstitialDelegate);
+}
+
+static IMP ABOriginalMolocoShowFromIMP = NULL;
+static IMP ABOriginalMolocoShowFromMutedIMP = NULL;
 static void AB_Moloco_showFrom(id self, SEL _cmd, id vc) {
+    if (ABMolocoShouldPassthrough(self)) {
+        ABDebugLog(@"[AUTOCLOSE] MolocoSDK.PublisherFullscreenAd showFrom: PASSTHROUGH (MAX bridging delegate)");
+        if (ABOriginalMolocoShowFromIMP) {
+            ((void (*)(id, SEL, id))ABOriginalMolocoShowFromIMP)(self, _cmd, vc);
+        }
+        return;
+    }
     ABLogBlocked(self, _cmd);
     ABNotifyMolocoDelegate(self);
 }
 static void AB_Moloco_showFrom_muted(id self, SEL _cmd, id vc, BOOL muted) {
+    if (ABMolocoShouldPassthrough(self)) {
+        ABDebugLog(@"[AUTOCLOSE] MolocoSDK.PublisherFullscreenAd showFrom:muted: PASSTHROUGH (MAX bridging delegate)");
+        if (ABOriginalMolocoShowFromMutedIMP) {
+            ((void (*)(id, SEL, id, BOOL))ABOriginalMolocoShowFromMutedIMP)(self, _cmd, vc, muted);
+        }
+        return;
+    }
     ABLogBlocked(self, _cmd);
     ABNotifyMolocoDelegate(self);
 }
@@ -429,6 +985,29 @@ static void AB_Pangle_presentFromRootViewController_Reward(id self, SEL _cmd, id
     ABCallDelegate1(delegate, NSSelectorFromString(@"adDidPresentFullScreen:"), self);
     ABCallDelegate1ThenBool(delegate, NSSelectorFromString(@"rewardedAd:userEarnedReward:"), self, YES);
     ABCallDelegate1(delegate, NSSelectorFromString(@"adDidDismissFullScreen:"), self);
+}
+
+/// tokyo.plott.tesの実機検証で、PAGRewardedAdがアプリ自身のPangle SDK直接利用ではなく
+/// AppLovin MAXのPangleメディエーションアダプタ経由で使われているケースを確認した。この
+/// 場合delegateの実クラスは"ALByteDanceRewardedVideoAdDelegate"のようなAppLovin自前の
+/// ブリッジクラス("AL"プレフィックス)で、Pangle公式ドキュメント通りのdelegateプロトコル名
+/// (adDidPresentFullScreen:等)を一切実装しておらず、上のAB_Pangle_presentFromRootViewController_Reward
+/// (ブロック+偽delegate通知)では報酬が付与されない。この場合はブロックせず元の実装に
+/// 任せ、MAUnityAdManager.didDisplayAd:フック(ABMAXAutoDismissPresentedViewController、
+/// MARewardedAd用に実装済み)に処理を委ねる。delegateが"AL"プレフィックスでない場合
+/// (Snowで確認したような、アプリ自身のPangle SDK直接利用)は従来通りブロック+偽delegate
+/// 通知を使う。
+static IMP ABOriginalPAGRewardedAdPresentFromRootViewControllerIMP = NULL;
+static void AB_PAGRewardedAd_presentFromRootViewController_Conditional(id self, SEL _cmd, id vc) {
+    id delegate = ABGetDelegate(self);
+    if (ABDelegateLooksLikeMAXBridge(delegate)) {
+        ABDebugLog(@"[AUTOCLOSE] PAGRewardedAd presentFromRootViewController: PASSTHROUGH (MAX bridging delegate %@)", NSStringFromClass([delegate class]));
+        if (ABOriginalPAGRewardedAdPresentFromRootViewControllerIMP) {
+            ((void (*)(id, SEL, id))ABOriginalPAGRewardedAdPresentFromRootViewControllerIMP)(self, _cmd, vc);
+        }
+        return;
+    }
+    AB_Pangle_presentFromRootViewController_Reward(self, _cmd, vc);
 }
 
 /// Vungle Ads SDK(新API、名前空間`VungleAdsSDK`、Snowで実機確認)。Swift実装で
@@ -760,6 +1339,61 @@ static void ABLogSuspiciousAdClasses(void) {
     }
 }
 
+/// ABLogSuspiciousAdClassesの汎用版。起動時の1回だけでなく、プレイアブル広告の
+/// ViewController提示直後など任意のタイミングで呼び出し、その時点でロード済みの
+/// クラスをキーワードで絞り込んで列挙する。Unity Adsのプレイアブル広告本体
+/// (UnityAds.WebViewContainerViewController)はメソッドがほぼ無い薄いコンテナに過ぎず、
+/// 報酬報告ロジックを持つ本体クラス(ブリッジ/リスナー等)は広告がロードされるまで
+/// クラスローダーに現れない可能性があるため、起動時スキャンでは取りこぼす。
+static void ABLogClassesContainingSubstringNow(NSString *substring) {
+    int bufferCount = objc_getClassList(NULL, 0);
+    if (bufferCount <= 0) {
+        return;
+    }
+    Class *classes = (Class *)malloc(sizeof(Class) * (unsigned long)bufferCount);
+    if (!classes) {
+        return;
+    }
+    int actualCount = objc_getClassList(classes, bufferCount);
+    int limit = actualCount < bufferCount ? actualCount : bufferCount;
+    NSMutableArray<NSString *> *matched = [NSMutableArray array];
+    for (int i = 0; i < limit; i++) {
+        const char *cName = class_getName(classes[i]);
+        if (!cName) {
+            continue;
+        }
+        NSString *name = @(cName);
+        if ([name rangeOfString:substring].location != NSNotFound) {
+            [matched addObject:name];
+        }
+    }
+    free(classes);
+    ABDebugLog(@"[SCAN] %lu classes containing \"%@\" found (live scan):", (unsigned long)matched.count, substring);
+    for (NSString *name in matched) {
+        ABDebugLog(@"[SCAN]   %@", name);
+    }
+}
+
+/// root自身、または子孫のうちクラス名にsubstringを含む最初のUIViewを探す。プレイアブル
+/// 広告のViewController(UnityAds.WebViewContainerViewController)自体は実体を持たず、
+/// 実際のWebView(VIEWDUMPで確認済みのUnityAds.ViewStateObservableWebView)が
+/// 真の広告ロジックを保持している可能性が高いため、そちらを直接introspectする。
+static UIView *_Nullable ABFindSubviewClassNameContaining(UIView *root, NSString *substring) {
+    if (!root) {
+        return nil;
+    }
+    if ([NSStringFromClass([root class]) rangeOfString:substring].location != NSNotFound) {
+        return root;
+    }
+    for (UIView *subview in root.subviews) {
+        UIView *found = ABFindSubviewClassNameContaining(subview, substring);
+        if (found) {
+            return found;
+        }
+    }
+    return nil;
+}
+
 /// 指定クラス(インスタンスメソッド+クラスメソッド)の全メソッド名を診断ログに残す。
 /// GFPInterstitialAd/GFPRewardedAdのshowFromRootViewController:フックがNGだったため、
 /// 正しいメソッド名を実機で特定するための保険(Snow調査用)。
@@ -807,6 +1441,26 @@ static void ABLogAllProperties(NSString *className) {
     free(props);
 }
 
+/// 指定クラスの全ivar名と型エンコーディングを診断ログに残す。プロパティとして公開されて
+/// いない内部状態(S2S検証フラグ、UnitySendMessage送信先のGameObject名など)を推測する
+/// 手がかりにする(tokyo.plott.tes調査用)。
+static void ABLogAllIvars(NSString *className) {
+    Class cls = NSClassFromString(className);
+    if (!cls) {
+        ABDebugLog(@"[SCAN] class not found: %@", className);
+        return;
+    }
+    unsigned int count = 0;
+    Ivar *ivars = class_copyIvarList(cls, &count);
+    ABDebugLog(@"[SCAN] %@ ivars (%u):", className, count);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = ivar_getName(ivars[i]);
+        const char *type = ivar_getTypeEncoding(ivars[i]);
+        ABDebugLog(@"[SCAN]   %s : %s", name ?: "?", type ?: "?");
+    }
+    free(ivars);
+}
+
 #pragma mark - Install
 
 void ABInstallThirdPartyAdHooks(void) {
@@ -843,7 +1497,14 @@ void ABInstallThirdPartyAdHooks(void) {
 
     // AppLovin MAX: インタースティシャル・リワード・アプリ起動時オープン広告は同じshow系APIを共有
     ABInstallMAXFullscreenAdHooks(@"MAInterstitialAd", NO);
-    ABInstallMAXFullscreenAdHooks(@"MARewardedAd", YES);
+    // MARewardedAdはdelegate偽装(ABNotifyMAXDelegate、didClickAd:追加・ALAtomicBooleanフラグ
+    // 強制まで試した)では「広告の取得に失敗しました」表示とともに報酬が付与されない問題が
+    // tokyo.plott.tesの実機検証で確定した。ALMediatedFullscreenAdのadViewControllerObserver
+    // DelaySeconds等のプロパティから、SDKがshow後に実際のViewController提示を別タイマーで
+    // 監視しており、show自体を完全にブロックするとこの監視に失敗することが原因と判断。
+    // showはブロックせず元の実装に任せ、表示直後に自動で閉じる方式に切り替えた
+    // (ABInstallMAXRewardedAutoClose、上記参照)。
+    ABInstallMAXRewardedAutoClose();
     // MARewardedInterstitialAd(リワード付きインタースティシャル、プレイアブルクリエイティブが
     // 配信されることもある)はREADME公開時点で対応漏れだった。Godusの実機テストで、対応済みの
     // MARewardedAd/MAInterstitialAdはブロックできているのに別の広告(AppLovinのプレイアブル)が
@@ -888,11 +1549,14 @@ void ABInstallThirdPartyAdHooks(void) {
 
     // MolocoSDK: インタースティシャル/リワード共用の実体クラスPublisherFullscreenAdは
     // NSObjectを継承したSwiftクラス。ランタイム上の名前はSDKバージョンで
-    // マングルされうるためサフィックス一致で解決する。
-    ABLogSwizzle(@"*PublisherFullscreenAd.showFrom:",
-                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:"), (IMP)AB_Moloco_showFrom, kTypesArg));
-    ABLogSwizzle(@"*PublisherFullscreenAd.showFrom:muted:",
-                 ABSwizzleInstanceMethodBySuffix(@"PublisherFullscreenAd", NSSelectorFromString(@"showFrom:muted:"), (IMP)AB_Moloco_showFrom_muted, kTypesArgBool));
+    // マングルされうるためサフィックス一致で解決する。MAX経由(delegateがAppLovin自前の
+    // ブリッジクラス)の場合は元の実装に任せる必要があるため、original IMPを保持できる
+    // KeepingOriginal版を使う(ABFindClassBySuffixでクラス自体は解決してから渡す)。
+    Class molocoCls = ABFindClassBySuffix(@"PublisherFullscreenAd");
+    ABLogSwizzle(@"*PublisherFullscreenAd.showFrom: (MAX-aware)",
+                 ABSwizzleInstanceMethodKeepingOriginal(molocoCls, NSSelectorFromString(@"showFrom:"), (IMP)AB_Moloco_showFrom, kTypesArg, &ABOriginalMolocoShowFromIMP));
+    ABLogSwizzle(@"*PublisherFullscreenAd.showFrom:muted: (MAX-aware)",
+                 ABSwizzleInstanceMethodKeepingOriginal(molocoCls, NSSelectorFromString(@"showFrom:muted:"), (IMP)AB_Moloco_showFrom_muted, kTypesArgBool, &ABOriginalMolocoShowFromMutedIMP));
     ABInstallHideBannerHookSet(@"MolocoBannerAdView",
                                (IMP)AB_MolocoBannerAdView_didMoveToWindow, &ABOriginalMolocoBannerAdViewDidMoveToWindowIMP,
                                (IMP)AB_MolocoBannerAdView_setHidden, &ABOriginalMolocoBannerAdViewSetHiddenIMP,
@@ -947,8 +1611,11 @@ void ABInstallThirdPartyAdHooks(void) {
                  ABSwizzleInstanceMethod(@"PAGInterstitialAd", NSSelectorFromString(@"presentFromRootViewController:"), (IMP)AB_Pangle_presentFromRootViewController_NoReward, kTypesArg));
     ABLogSwizzle(@"PAGLInterstitialAd.presentFromRootViewController:",
                  ABSwizzleInstanceMethod(@"PAGLInterstitialAd", NSSelectorFromString(@"presentFromRootViewController:"), (IMP)AB_Pangle_presentFromRootViewController_NoReward, kTypesArg));
-    ABLogSwizzle(@"PAGRewardedAd.presentFromRootViewController:",
-                 ABSwizzleInstanceMethod(@"PAGRewardedAd", NSSelectorFromString(@"presentFromRootViewController:"), (IMP)AB_Pangle_presentFromRootViewController_Reward, kTypesArg));
+    // PAGRewardedAdはアプリ自身のPangle SDK直接利用とAppLovin MAXのPangleメディエーション
+    // アダプタ経由の両方があり得るため、delegateの実クラス名で分岐する(上記
+    // AB_PAGRewardedAd_presentFromRootViewController_Conditional参照)。
+    ABLogSwizzle(@"PAGRewardedAd.presentFromRootViewController: (MAX-aware)",
+                 ABSwizzleInstanceMethodKeepingOriginal(NSClassFromString(@"PAGRewardedAd"), NSSelectorFromString(@"presentFromRootViewController:"), (IMP)AB_PAGRewardedAd_presentFromRootViewController_Conditional, kTypesArg, &ABOriginalPAGRewardedAdPresentFromRootViewControllerIMP));
     ABInstallHideBannerHookSet(@"PAGBannerAd",
                                (IMP)AB_PAGBannerAd_didMoveToWindow, &ABOriginalPAGBannerAdDidMoveToWindowIMP,
                                (IMP)AB_PAGBannerAd_setHidden, &ABOriginalPAGBannerAdSetHiddenIMP,

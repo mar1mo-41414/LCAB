@@ -8,7 +8,7 @@ LIBRARY_NAME = LCAdBlocker
 
 LCAdBlocker_FILES = $(wildcard Sources/*.m)
 LCAdBlocker_CFLAGS = -fobjc-arc -Wall -ISources
-LCAdBlocker_FRAMEWORKS = UIKit Foundation StoreKit
+LCAdBlocker_FRAMEWORKS = UIKit Foundation StoreKit AVFoundation
 LCAdBlocker_LIBRARY_EXTENSION = .dylib
 LCAdBlocker_INSTALL_PATH = /usr/lib
 

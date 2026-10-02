@@ -159,6 +159,107 @@ capture the real `MAAd` instance the SDK actually loaded (keyed by format:
 interstitial/rewarded/appOpen), and that captured instance is reused when notifying the delegate
 after a blocked show call.
 
+## AppLovin MAX mediation: when the delegate doesn't follow the network's official protocol
+
+AppLovin MAX is a mediation platform that switches between several ad networks (Pangle, Unity
+Ads, Moloco, etc.) behind a single API (`MARewardedAd`). Hooking each network's real SDK directly
+(`PAGRewardedAd`, `UADSRewardedAd`, `MolocoSDK.PublisherFullscreenAd`, etc.) works when that SDK is
+used standalone by the app, but when it's used **through MAX's mediation adapter**, the real
+delegate turns out to be an AppLovin-authored bridging class that does not implement the network's
+officially documented protocol at all. Confirmed on-device: `ALByteDanceRewardedVideoAdDelegate`,
+`ALUnityAdsRewardedDelegate`, `AppLovinMediationMolocoAdapter.MolocoRewardedAdapterDelegate` — the
+class name either starts with `AL` or contains `AppLovin`.
+
+What makes this nasty is that it's not just "the fake notification silently fails to grant a
+reward." If the show call is fully blocked and the fake delegate notification also fails (because
+the delegate doesn't respond to the guessed selectors), the ad never displays at all, and the
+game's own code keeps waiting forever for an ad-completion callback that will never arrive —
+freezing the UI (confirmed on-device with tokyo.plott.tes's Moloco mediation: background music
+kept playing but all input stopped responding).
+
+The fix is to check the delegate's real class name inside each SDK's show hook; if it looks like
+an AppLovin bridging class, don't block — pass through to the original implementation (the
+original IMP kept via `ABSwizzleInstanceMethodKeepingOriginal`) and let the ad actually display.
+From there, hook `MAUnityAdManager.didDisplayAd:` (called by MAX's official Unity Plugin
+regardless of which underlying network delivered the ad, the moment MAX recognizes the ad
+ViewController was presented) and hand off to the auto-close/forced-reward logic described below.
+The detection itself is a simple heuristic:
+
+```objc
+static BOOL ABDelegateLooksLikeMAXBridge(id delegate) {
+    NSString *className = NSStringFromClass([delegate class]);
+    return [className hasPrefix:@"AL"] || [className rangeOfString:@"AppLovin"].location != NSNotFound;
+}
+```
+
+When the delegate is the app's own implementation (standalone SDK usage), this returns NO and the
+code falls back to the original block-and-fake-notify approach.
+
+## Auto-close and forced reward completion for rewarded ads (MARewardedAd/MAX)
+
+The traditional approach of blocking `MARewardedAd`'s show APIs and faking a delegate notification
+turned out to fail on-device with tokyo.plott.tes, surfacing an in-game "Failed to load ad" error.
+Properties on `ALMediatedFullscreenAd` such as `adViewControllerObserverDelaySeconds` suggest the
+MAX SDK runs a separate timer after `show` is called to check whether the ad ViewController was
+actually presented — fully blocking the show call appears to trip this watchdog.
+
+So `MARewardedAd`'s show APIs are now **passed through, not blocked**. Shortly after
+`MAUnityAdManager.didDisplayAd:` fires (0.6s later), the code finds whatever ViewController is
+currently presented at the top of the key window and closes it automatically. The exact mechanism
+for making the reward "count" depends on the creative format.
+
+### Video ads (`ALBaseVideoViewController` subclasses)
+
+An on-device runtime class-structure dump revealed a set of flags the SDK itself uses to mean
+"fully watched" (`wasPlayedToEnd`, `adViewFullyWatched`, `treatAdAsFullyWatched`), plus
+`-scheduleReportRewardTaskIfNeeded`, the method that actually kicks off reward reporting based on
+those flags. Simply calling `handleCloseButton` or force-dismissing was treated as an early skip
+and granted no reward, but forcing these flags and then calling
+`scheduleReportRewardTaskIfNeeded` directly reliably granted the reward on-device.
+
+An alternative approach — reaching the real `AVPlayer` through the `-avPlayer` property, seeking
+near the end of the video, and resuming playback so the SDK's own end-of-playback detection fires
+naturally — was also tried, but tokyo.plott.tes's ads turned out to be HTML/MRAID-template ads
+with the video played by a `<video>` tag inside a WKWebView, so `avPlayer` was `nil` every single
+time (a video-format ad doesn't guarantee `avPlayer` is usable — it depends on how the creative is
+actually delivered). This AVPlayer-seek path is kept as a best-effort extra when it happens to be
+available, but the primary mechanism is forcing the flags and calling
+`scheduleReportRewardTaskIfNeeded` directly.
+
+Because `scheduleReportRewardTaskIfNeeded` may internally use a timer (`reportRewardTimer`), the
+code waits 2.5 seconds before calling `handleCloseButton`/`dismissViewControllerAnimated:` instead
+of closing immediately — closing too early risks triggering `ALMediatedFullscreenAd`'s own
+`cancelRewardTask` (confirmed to exist as an ivar), which would cancel the reward report that was
+just kicked off.
+
+### Playable ads (`UnityAds.WebViewContainerViewController`)
+
+The playable ad's own ViewController is a thin container with only 8 methods and none of the
+self-contained reward-reporting machinery seen above. A runtime scan of loaded classes (filtering
+`objc_getClassList` by keyword) turned up `ALUnityAdsRewardedDelegate`, AppLovin MAX's own Unity
+Ads mediation adapter delegate class. It implements custom internal methods —
+`-showDidStart:`, `-showDidClick:`, `-showDidReceiveReward:`, `-showDidComplete:with:`,
+`-showDidFail:error:` — that receive notifications from the Unity Ads SDK and forward them to
+MAX's official adapter delegate protocol (`MARewardedAdapterDelegate`, held in ivar `_delegate`).
+
+If this instance can be driven directly, the reward can be granted without ever waiting for Unity
+Ads' real playback completion. To capture a live instance, the initializer
+`-initWithParentAdapter:andNotify:` is hooked via `ABSwizzleInstanceMethodKeepingOriginal` (this
+runs before the show call, during listener setup — hooking it only after `didDisplayAd:` fires
+would already be too late, so it has to be installed ahead of time during the normal install
+pass), stashing the resulting `self` in a static variable. Once the ad is displayed, sending
+`showDidStart:` → `showDidReceiveReward:` → `showDidComplete:with:` directly to that captured
+instance reliably granted the reward (`showDidClick:` is deliberately never sent, since that would
+pollute the ad network's click-attribution stats for a click that never happened).
+
+The real argument types for these methods aren't documented, so a naive `objc_msgSend` cast isn't
+safe. Instead, a generic helper (`ABCallSelectorWithZeroFilledArgs`) reads the real type encoding
+at runtime via `methodSignatureForSelector:` and fills object-typed arguments with `nil` and
+everything else with zero (after checking the type's byte width fits). If an argument type is
+larger than 8 bytes (e.g. a struct), the call is skipped entirely rather than risk an
+out-of-bounds read. This pattern generalizes to safely driving any undocumented SDK-internal API
+discovered only through an on-device method-list dump.
+
 ## Diagnostic logging and view tree dumps
 
 `ABDebugLog` records whether each hook installed successfully, which hooks actually fired, and the
