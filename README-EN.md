@@ -76,6 +76,14 @@ Produces `.theos/obj/debug/LCAdBlocker.dylib`.
   been watched. This isn't about granting an unfair advantage to third parties — it's this dylib's
   own user being able to use the feature without watching an ad, which is the whole point of an ad
   blocker.
+- **Some rewarded ads strictly verify that the ad was actually viewed** (confirmed with Pangle,
+  Unity Ads and Moloco delivered through AppLovin MAX's mediation layer). For these, the show call
+  itself is not blocked — the ad briefly displays for real for a few seconds before being closed
+  automatically. It won't be fully silent/invisible; expect a brief flash of the real ad. This is
+  because the SDK runs a separate timer checking whether the ad ViewController was actually
+  presented, and fully blocking the show call trips that check, causing the reward to never be
+  granted (and in some cases the game hangs forever waiting for a completion callback that never
+  arrives).
 - **The ad content itself (image, text, tap targets) can disappear while the banner slot around it
   (a blank strip of space) stays reserved on screen.** That strip is often a generic `UIView` with
   no SDK-specific hint in its class name, so it can't be hooked at the class level. A generic fix
