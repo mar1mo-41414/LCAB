@@ -346,3 +346,25 @@ placementIdを保持し、nil/未実装delegateはスキップします。既存
 添付ログはプレイアブルの表示を示しますが、この入口の実際の呼出しとブロック後の
 ゲーム進行は実機で再確認が必要です。回帰ハーネスと確認手順は
 [Tests/README.md](../Tests/README.md) を参照してください。
+
+## ironSource / LevelPlay経由のUnity Adsと新バナー
+
+2048 v4.0.8の追試ログでは、UnityAdsクラスメソッドのフックはOKでもBLOCKEDがなく、
+プレイアブルが表示されました。したがって前項の入口の追加だけでは不十分です。
+IPAのUnityFrameworkに含まれる以下のObjective-Cメタデータを確認しました。
+
+- `ISUnityAdsAdapter` の `showInterstitialWithViewController:adapterConfig:delegate:`
+  (`v40@0:8@16@24@32`)
+- `ISInterstitialAdapterDelegate` の引数なしメソッド
+  `adapterInterstitialDidOpen` / `adapterInterstitialDidShow` / `adapterInterstitialDidClose`
+- `LPMBannerAdView` (追試ログでもhidden=0、子ビューありの状態を確認)
+
+UnityAds本体のObjC入口を通らない表示にも対応するため、アダプタの上記表示メソッドを
+フックし、メインキューでopen→show→closeを一度ずつ通知します。ロード・クリック・報酬の
+通知は追加せず、リワードの表示APIも変更しません。このアダプタ入口が実際に発火するか、
+SDKの内部状態とゲーム進行が維持されるかは実機での確認が必要です。
+
+新バナーには既存のdidMoveToWindow/setHidden:/layoutSubviews/setAlpha:フックを使用し、
+自身と子孫を非表示にします。外部Auto Layout制約との衝突を避けるためNO_REMOVE版を使い、
+親・兄弟の変更やframeの変更はしません。広告枠だけが残る既知の制約は引き続きあります。
+通信・初期化・ロード、アプリ固有クラス、汎用WKWebViewの実装には触れていません。

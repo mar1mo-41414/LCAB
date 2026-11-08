@@ -30,3 +30,22 @@ Device acceptance check (2048 v4.0.8 under LiveContainer):
    or block networking as a fallback.
 
 The Linux development environment cannot compile or execute this Apple SDK harness.
+
+## ironSource / LevelPlay follow-up
+
+The same harness now registers mock `ISUnityAdsAdapter` and `LPMBannerAdView`
+classes after an initial install pass. It checks adapter interception, one async
+open/show/close sequence, nil/non-conforming delegates, banner re-hide after SDK
+hidden/alpha writes and layout, retained superview, and unaffected sibling/parent
+views (including inherited UIView method isolation).
+
+Device acceptance additionally requires:
+
+- `[INSTALL] ISUnityAdsAdapter.showInterstitialWithViewController:adapterConfig:delegate: -> OK`
+  and the matching `[BLOCKED]` when game over occurs.
+- `[CALLBACK]` entries for adapter open/show/close; playable does not appear and
+  the next game starts normally, repeatedly.
+- `LPMBannerAdView` banner hooks install OK; bottom banner stays hidden across
+  refreshes/rotation, without losing game controls. A reserved blank slot may remain.
+- Other mediated/rewarded flows still work. If the adapter hook does not fire,
+  collect a fresh log rather than assuming this path is confirmed.

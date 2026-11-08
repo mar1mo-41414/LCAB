@@ -826,6 +826,22 @@ static void AB_UADSRewardedAd_show_delegate(id self, SEL _cmd, id viewController
     ABCallDelegate1(delegate, NSSelectorFromString(@"unityAdsShowStart:"), nil);
 }
 
+/// ironSourceのUnity Adsアダプタ。Swift内部の表示呼出しはUnityAdsのObjC入口を
+/// 経由しない場合があるため、メディエーションの表示トリガーを直接止める。
+/// IPA内のISInterstitialAdapterDelegateで確認した引数なしの通知だけを送る。
+static void AB_ISUnityAdsAdapter_showInterstitial(id self, SEL _cmd, id vc, id config, id delegate) {
+    ABLogBlocked(self, _cmd);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (NSString *name in @[@"adapterInterstitialDidOpen", @"adapterInterstitialDidShow", @"adapterInterstitialDidClose"]) {
+            SEL callback = NSSelectorFromString(name);
+            if ([delegate respondsToSelector:callback]) {
+                ABDebugLog(@"[CALLBACK] %@ %@", NSStringFromClass([delegate class]), name);
+                ((void (*)(id, SEL))objc_msgSend)(delegate, callback);
+            }
+        }
+    });
+}
+
 /// optionsを省略するUnity Ads静的API。2048 v4.0.8のUnityFramework内で
 /// +show:placementId:showDelegate: (v40@0:8@16@24@32)を確認。
 /// Swift内部で別のshowへ直接委譲される場合、options付きのObjC入口のフックだけでは
@@ -1179,6 +1195,8 @@ static void ABForceHiddenRecursive(UIView *view) {
 
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_GADBannerView, ABOriginalGADBannerViewDidMoveToWindowIMP, ABOriginalGADBannerViewSetHiddenIMP, ABOriginalGADBannerViewLayoutSubviewsIMP, ABOriginalGADBannerViewSetAlphaIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_FBAdView, ABOriginalFBAdViewDidMoveToWindowIMP, ABOriginalFBAdViewSetHiddenIMP, ABOriginalFBAdViewLayoutSubviewsIMP, ABOriginalFBAdViewSetAlphaIMP)
+// LevelPlayの新バナー。外部制約を壊さないよう階層からは外さない。
+AB_DEFINE_HIDE_BANNER_HOOK_SET_NO_REMOVE(AB_LPMBannerAdView, ABOriginalLPMBannerAdViewDidMoveToWindowIMP, ABOriginalLPMBannerAdViewSetHiddenIMP, ABOriginalLPMBannerAdViewLayoutSubviewsIMP, ABOriginalLPMBannerAdViewSetAlphaIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_ISBannerView, ABOriginalISBannerViewDidMoveToWindowIMP, ABOriginalISBannerViewSetHiddenIMP, ABOriginalISBannerViewLayoutSubviewsIMP, ABOriginalISBannerViewSetAlphaIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_MAAdView, ABOriginalMAAdViewDidMoveToWindowIMP, ABOriginalMAAdViewSetHiddenIMP, ABOriginalMAAdViewLayoutSubviewsIMP, ABOriginalMAAdViewSetAlphaIMP)
 AB_DEFINE_HIDE_BANNER_HOOK_SET(AB_IMBanner, ABOriginalIMBannerDidMoveToWindowIMP, ABOriginalIMBannerSetHiddenIMP, ABOriginalIMBannerLayoutSubviewsIMP, ABOriginalIMBannerSetAlphaIMP)
@@ -1503,6 +1521,13 @@ void ABInstallThirdPartyAdHooks(void) {
                                (IMP)AB_FBAdView_setAlpha, &ABOriginalFBAdViewSetAlphaIMP);
 
     // ironSource
+    ABLogSwizzle(@"ISUnityAdsAdapter.showInterstitialWithViewController:adapterConfig:delegate:",
+                 ABSwizzleInstanceMethod(@"ISUnityAdsAdapter", NSSelectorFromString(@"showInterstitialWithViewController:adapterConfig:delegate:"), (IMP)AB_ISUnityAdsAdapter_showInterstitial, kTypesArgArgArg));
+    ABInstallHideBannerHookSet(@"LPMBannerAdView",
+                               (IMP)AB_LPMBannerAdView_didMoveToWindow, &ABOriginalLPMBannerAdViewDidMoveToWindowIMP,
+                               (IMP)AB_LPMBannerAdView_setHidden, &ABOriginalLPMBannerAdViewSetHiddenIMP,
+                               (IMP)AB_LPMBannerAdView_layoutSubviews, &ABOriginalLPMBannerAdViewLayoutSubviewsIMP,
+                               (IMP)AB_LPMBannerAdView_setAlpha, &ABOriginalLPMBannerAdViewSetAlphaIMP);
     ABInstallHideBannerHookSet(@"ISBannerView",
                                (IMP)AB_ISBannerView_didMoveToWindow, &ABOriginalISBannerViewDidMoveToWindowIMP,
                                (IMP)AB_ISBannerView_setHidden, &ABOriginalISBannerViewSetHiddenIMP,

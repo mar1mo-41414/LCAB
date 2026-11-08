@@ -33,7 +33,7 @@ See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for how it works under the hood
 | Apple StoreKit | `SKOverlay` | Ignores the present request |
 | Google AdMob | `GADInterstitialAd` / `GADRewardedAd` / `GADBannerView` | No-ops the show call, hides the banner |
 | Meta Audience Network | `FBInterstitialAd` / `FBRewardedVideoAd` / `FBAdView` | No-ops the show call, hides the banner |
-| ironSource | `ISBannerView` | Hides the banner |
+| ironSource / LevelPlay | `ISBannerView` / `LPMBannerAdView` / `ISUnityAdsAdapter` | Hides banners; blocks Unity Ads interstitial show and notifies open/show/close |
 | AppLovin MAX | `MAInterstitialAd` / `MARewardedAd` / `MAAppOpenAd` / `MAAdView` | No-ops the show call, hides the banner |
 | Chartboost | `CHBInterstitial` | No-ops the show call |
 | InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
