@@ -67,6 +67,25 @@ make
 
 Produces `.theos/obj/debug/LCAdBlocker.dylib`.
 
+## Confirmed on device
+
+2048 v4.0.8 (`com.ketchapp.2048`) under LiveContainer: the user confirmed that
+no game-over playable ad appears, the game proceeds directly to the restart
+screen, and the persistent bottom banner is hidden.
+
+The final diagnostic log (`lcadblocker-4.log`) confirms interception at
+`ISUnityAdsAdapter.showInterstitialWithViewController:adapterConfig:delegate:`,
+followed by open/show/close callbacks to `ISInterstitialAdapterBridge`.
+`LPMBannerAdView` remains hidden with alpha 0, including after a request to show it.
+The Swift Unity Ads interstitial hook installs successfully, but does not fire in
+this log; it is not the confirmed blocking path for this run.
+
+This verifies these flows on this app/version, not all mediation networks or
+rewarded-ad flows. The implementation remains SDK-generic, with no app-specific
+conditions or changes to network/init/load behavior. See
+[technical details](docs/TECHNICAL-EN.md#device-verification-result-2048-v408)
+for evidence and remaining verification scope.
+
 ## Known limitations
 
 - If an ad SDK is implemented in Swift, exposes its show API only as a protocol existential, and

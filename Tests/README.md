@@ -22,11 +22,14 @@ delegates. This is a mock-runtime test, not proof of behavior in a real mediatio
 Device acceptance check (2048 v4.0.8 under LiveContainer):
 
 1. Inject the rebuilt dylib and restart the app.
-2. Confirm `[INSTALL] *UnityAds(class).show:placementId:showDelegate: -> OK`.
-3. Play until game over; confirm the matching `[BLOCKED]` entry, no playable
-   presentation, and that restart/next-game controls still work. Repeat several times.
-4. Check other ad flows, particularly voluntary rewarded ads, still return control.
-5. If a playable still appears, collect the new log; do not hide generic WKWebViews
+2. Check installation results for the relevant SDK show and banner hooks.
+   An INSTALL OK alone does not prove interception.
+3. Play until game over; verify a matching show `[BLOCKED]` entry and completion
+   callbacks on the path actually used. Alternative hooks need not all fire.
+4. Confirm no playable appears, the restart screen is reached, and the bottom
+   banner is hidden. Repeat game overs and test refresh/rotation for wider coverage.
+5. Check voluntary rewarded ads separately; game-over success does not verify them.
+6. If a playable still appears, collect the new log; do not hide generic WKWebViews
    or block networking as a fallback.
 
 The Linux development environment cannot compile or execute this Apple SDK harness.
@@ -57,12 +60,31 @@ install passes, tests interception after retries, ordered asynchronous native
 callbacks carrying the actual ad object, nil/non-conforming delegates, and checks
 that `_TtC8UnityAds14UADSRewardedAd` remains unchanged.
 
-On device, expect:
+When specifically testing the Swift-class entry, expect:
 
 - `[INSTALL] _TtC8UnityAds18UADSInterstitialAd.show:delegate: -> OK`
 - `[BLOCKED] _TtC8UnityAds18UADSInterstitialAd show:delegate:` at game over
 - The supplied delegate responds to `showDidStart:` / `showDidComplete:with:`;
   the game returns to normal play with no playable. Test multiple game overs.
 
-The old unmangled-class NG is not the new hook's result. If no new BLOCKED entry
-appears, the actual call path remains unconfirmed; attach the full updated log.
+The old unmangled-class NG is not the new hook's result. If this BLOCKED entry
+does not appear, this specific path remains unconfirmed. Another show hook may
+block the ad first, as in the successful final device run below.
+
+
+## Completed device acceptance: 2048 v4.0.8
+
+The user confirmed no game-over ad, direct progression to the restart screen, and
+no persistent bottom banner. The supplied `lcadblocker-4.log` records:
+
+- `ISUnityAdsAdapter showInterstitialWithViewController:adapterConfig:delegate:`
+  blocked at 10:09:47.011.
+- Open/show/close callbacks to `ISInterstitialAdapterBridge` at 10:09:47.030.
+- `LPMBannerAdView` remaining hidden=1, alpha=0 after re-show requests.
+- Swift interstitial installation OK, without that hook firing in this run.
+
+This is a completed user/device check for the reported flows, not an executed
+Simulator harness test. Repeated game overs, refresh/rotation coverage, other
+mediation/rewarded flows and native Swift callbacks are not established by this log.
+The earlier sections describe mock coverage and checks for individual paths; they
+are not requirements for every hook to fire in one device run.

@@ -361,8 +361,8 @@ IPAのUnityFrameworkに含まれる以下のObjective-Cメタデータを確認�
 
 UnityAds本体のObjC入口を通らない表示にも対応するため、アダプタの上記表示メソッドを
 フックし、メインキューでopen→show→closeを一度ずつ通知します。ロード・クリック・報酬の
-通知は追加せず、リワードの表示APIも変更しません。このアダプタ入口が実際に発火するか、
-SDKの内部状態とゲーム進行が維持されるかは実機での確認が必要です。
+通知は追加せず、リワードの表示APIも変更しません。このアダプタ入口の発火とゲーム再開画面への遷移は、
+後述の最終実機確認で確認できました。他の配信経路・内部状態全般の検証ではありません。
 
 新バナーには既存のdidMoveToWindow/setHidden:/layoutSubviews/setAlpha:フックを使用し、
 自身と子孫を非表示にします。外部Auto Layout制約との衝突を避けるためNO_REMOVE版を使い、
@@ -387,3 +387,26 @@ Unity通知と同じ整数2を使用します。IPA内の `ISUADSInterstitialSho
 この修正ではSwiftリワードクラスに同じフックを拡大しません。初期化・ロード・通信、
 バナーや汎用WebViewの処理にも変更はありません。クラス名とABIの静的確認はできましたが、
 実際のBLOCKED発火と複数回のゲーム進行は新ビルドで確認する必要があります。
+
+
+### 実機確認結果：2048 v4.0.8
+
+最終ログ `lcadblocker-4.log` と利用者の報告により、今回の対応は完了とします。
+利用者は「広告は表示されず、そのままゲーム再開画面に行った」「バナー表示もなし」と
+確認しています。ログ上の根拠は次のとおりです。
+
+- 10:09:47.011: `[BLOCKED] ISUnityAdsAdapter showInterstitialWithViewController:adapterConfig:delegate:`
+- 10:09:47.030: `ISInterstitialAdapterBridge` に
+  `adapterInterstitialDidOpen` → `adapterInterstitialDidShow` → `adapterInterstitialDidClose`
+  の順で `[CALLBACK]` が記録されています。
+- `LPMBannerAdView` は `[BLOCKED]` が発火し、`setHidden:NO` の要求後も
+  VIEWDUMPでhidden=1・alpha=0を維持しています。
+- `_TtC8UnityAds18UADSInterstitialAd.show:delegate:` の登録はOKですが、このログには
+  そのBLOCKEDはありません。今回の成功をSwift実クラス側のフック発火の証拠とはしません。
+  以前のログでアダプタが未発火だった理由も、この結果だけでは断定できません。
+
+前節までの未確認事項は調査時点の履歴です。今回確認できたのはゲームオーバー時の
+広告抑止・再開画面への遷移・下部バナー非表示であり、複数回連続のゲームオーバー、
+他のメディエーション経路やリワード全般の動作、Swift入口の発火は別途確認対象です。
+Simulator用mockハーネスは実機確認とは別で、この開発環境では未実行です。
+実装・ビルド設定への追加変更はなく、本更新は確認結果の文書化のみです。

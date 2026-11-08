@@ -64,6 +64,24 @@ make
 
 `.theos/obj/debug/LCAdBlocker.dylib`が生成されます。
 
+## 実機での動作確認
+
+LiveContainer上の2048 v4.0.8 (`com.ketchapp.2048`) で、ゲームオーバー後の
+プレイアブル広告が表示されず、そのままゲーム再開画面へ進むこと、画面下の常時表示
+バナーも表示されないことを利用者に確認いただきました。
+
+最終診断ログ (`lcadblocker-4.log`) では、
+`ISUnityAdsAdapter.showInterstitialWithViewController:adapterConfig:delegate:` の
+ブロックと、`ISInterstitialAdapterBridge` へのopen→show→close通知を確認しました。
+`LPMBannerAdView` は再表示要求後もhidden=1・alpha=0を維持しています。
+Swift版Unity Adsインタースティシャルのフックは登録成功していますが、このログでは
+発火していないため、今回の成功経路とは区別しています。
+
+確認済みの範囲はこのアプリ・バージョンの上記動作です。他の配信経路やリワード広告
+全般の動作保証ではありません。実装は引き続きSDK共通の汎用方式で、アプリ固有分岐や
+通信・初期化・ロード処理の変更はありません。詳細は
+[技術資料](docs/TECHNICAL.md#実機確認結果2048-v408) を参照してください。
+
 ## 既知の制約
 
 - 広告SDKがSwift実装で、表示APIがprotocol existential経由でユーザーコードに渡され、かつ
