@@ -366,8 +366,8 @@ insufficient. Objective-C metadata in the supplied UnityFramework confirms:
 Block the adapter's show trigger and asynchronously notify open/show/close once
 each on the main queue, covering presentation that bypasses UnityAds ObjC entry
 points. No load, click, or reward callbacks are added; rewarded show is unchanged.
-Actual invocation of this adapter entry and SDK/game state after blocking still
-require device verification.
+The final device verification below confirms this adapter entry firing and
+progression to the restart screen, not all internal state or delivery paths.
 
 The banner uses the existing didMoveToWindow/setHidden:/layoutSubviews/setAlpha:
 hook set, hiding itself and descendants. Use NO_REMOVE to avoid breaking external
@@ -396,3 +396,26 @@ Do not extend this fix to the Swift rewarded class. Initialization, load, networ
 banner and generic WebView behavior are unchanged. Runtime name and ABI have been
 statically checked; hook firing and repeated game continuation still need testing
 with a rebuilt dylib.
+
+
+### Device verification result: 2048 v4.0.8
+
+The final `lcadblocker-4.log` and user report close this investigation. The user
+confirmed no game-over ad, direct progression to the restart screen, and no bottom
+banner. Evidence in the log:
+
+- 10:09:47.011: `[BLOCKED] ISUnityAdsAdapter showInterstitialWithViewController:adapterConfig:delegate:`
+- 10:09:47.030: `[CALLBACK]` to `ISInterstitialAdapterBridge`, ordered
+  `adapterInterstitialDidOpen`, `adapterInterstitialDidShow`, `adapterInterstitialDidClose`.
+- `LPMBannerAdView` hooks fire; VIEWDUMP retains hidden=1 and alpha=0 even after
+  `setHidden:NO` requests.
+- `_TtC8UnityAds18UADSInterstitialAd.show:delegate:` installs OK but has no BLOCKED
+  entry here. This successful run does not prove the Swift-class hook fired, nor
+  explain why the adapter did not fire in the earlier logs.
+
+Earlier pending-verification statements describe the investigation at those stages.
+The confirmed scope is game-over ad suppression, restart-screen progression and
+bottom-banner hiding. Repeated game overs, other mediation paths, rewarded flows
+and the Swift entry firing remain separate verification items. The Simulator mock
+harness has not been executed in this development environment. This update only
+documents the outcome; implementation and build settings are unchanged.
