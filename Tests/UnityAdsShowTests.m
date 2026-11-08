@@ -9,9 +9,12 @@ static void OriginalShow(id self, SEL cmd, id vc, id placement, id delegate) {
     originalCalls++;
 }
 
+static void OriginalNativeShow(id self, SEL cmd, id vc, id delegate) { originalCalls++; }
+
 @interface ShowDelegate : NSObject
 @property(nonatomic, strong) NSMutableArray *events;
 @property(nonatomic, strong) NSString *placement;
+@property(nonatomic, strong) id nativeAd;
 @end
 @implementation ShowDelegate
 - (instancetype)init {
@@ -27,6 +30,15 @@ static void OriginalShow(id self, SEL cmd, id vc, id placement, id delegate) {
     NSCAssert([NSThread isMainThread], @"callback must run on main thread");
     NSCAssert(placement == self.placement && state == 2, @"placement/completed enum mismatch");
     [self.events addObject:@"complete"];
+}
+- (void)showDidStart:(id)ad {
+    NSCAssert([NSThread isMainThread], @"native callback must run on main thread");
+    self.nativeAd = ad;
+    [self.events addObject:@"native-start"];
+}
+- (void)showDidComplete:(id)ad with:(NSInteger)state {
+    NSCAssert([NSThread isMainThread] && ad == self.nativeAd && state == 2, @"native callback arguments");
+    [self.events addObject:@"native-close"];
 }
 - (void)adapterInterstitialDidOpen { [self.events addObject:@"open"]; }
 - (void)adapterInterstitialDidShow { [self.events addObject:@"show"]; }
@@ -53,7 +65,7 @@ int main(void) {
             [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
         }
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-        NSCAssert([delegate.events isEqual:@[@"start", @"complete"]], @"expected exactly one ordered callback pair");
+        NSCAssert(([delegate.events isEqual:@[@"start", @"complete"]]), @"expected exactly one ordered callback pair");
         // Nil and non-conforming delegates must not crash.
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(cls, show, nil, nil, nil);
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(cls, show, nil, placement, [NSObject new]);
@@ -72,7 +84,7 @@ int main(void) {
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, @"config", adapterDelegate);
         NSCAssert(adapterDelegate.events.count == 0, @"adapter callback must be asynchronous");
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-        NSCAssert([adapterDelegate.events isEqual:@[@"open", @"show", @"close"]], @"adapter callback order/count");
+        NSCAssert(([adapterDelegate.events isEqual:@[@"open", @"show", @"close"]]), @"adapter callback order/count");
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, nil, nil);
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, nil, [NSObject new]);
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
@@ -89,6 +101,28 @@ int main(void) {
         NSCAssert(banner.superview == parent && !parent.hidden && !sibling.hidden, @"must not remove banner or hide unrelated UI");
         sibling.hidden = NO;
         NSCAssert(!sibling.hidden, @"UIView inherited implementation must remain intact");
+        // Swift runtime spelling must work independently of all legacy class hooks.
+        Class nativeClass = objc_allocateClassPair([NSObject class], "_TtC8UnityAds18UADSInterstitialAd", 0);
+        Class rewardedClass = objc_allocateClassPair([NSObject class], "_TtC8UnityAds14UADSRewardedAd", 0);
+        SEL nativeShow = NSSelectorFromString(@"show:delegate:");
+        class_addMethod(nativeClass, nativeShow, (IMP)OriginalNativeShow, "v@:@@");
+        class_addMethod(rewardedClass, nativeShow, (IMP)OriginalNativeShow, "v@:@@");
+        objc_registerClassPair(nativeClass);
+        objc_registerClassPair(rewardedClass);
+        ABInstallThirdPartyAdHooks();
+        ABInstallThirdPartyAdHooks();
+        id nativeAd = [nativeClass new];
+        ShowDelegate *nativeDelegate = [ShowDelegate new];
+        ((void (*)(id, SEL, id, id))objc_msgSend)(nativeAd, nativeShow, nil, nativeDelegate);
+        NSCAssert(originalCalls == 0 && nativeDelegate.events.count == 0, @"native presentation blocked; callbacks deferred");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        NSCAssert(([nativeDelegate.events isEqual:@[@"native-start", @"native-close"]] && nativeDelegate.nativeAd == nativeAd), @"one native start/close pair with the actual ad");
+        ((void (*)(id, SEL, id, id))objc_msgSend)(nativeAd, nativeShow, nil, nil);
+        ((void (*)(id, SEL, id, id))objc_msgSend)(nativeAd, nativeShow, nil, [NSObject new]);
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        NSCAssert(originalCalls == 0, @"nil/non-conforming delegates must not present");
+        ((void (*)(id, SEL, id, id))objc_msgSend)([rewardedClass new], nativeShow, nil, nil);
+        NSCAssert(originalCalls == 1, @"this fix must leave Swift rewarded presentation unchanged");
         NSLog(@"Unity Ads show tests passed");
     }
     return 0;

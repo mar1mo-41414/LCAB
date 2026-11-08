@@ -49,3 +49,20 @@ Device acceptance additionally requires:
   refreshes/rotation, without losing game controls. A reserved blank slot may remain.
 - Other mediated/rewarded flows still work. If the adapter hook does not fire,
   collect a fresh log rather than assuming this path is confirmed.
+
+## Swift Unity Ads runtime-name regression
+
+The harness also registers `_TtC8UnityAds18UADSInterstitialAd` after the first
+install passes, tests interception after retries, ordered asynchronous native
+callbacks carrying the actual ad object, nil/non-conforming delegates, and checks
+that `_TtC8UnityAds14UADSRewardedAd` remains unchanged.
+
+On device, expect:
+
+- `[INSTALL] _TtC8UnityAds18UADSInterstitialAd.show:delegate: -> OK`
+- `[BLOCKED] _TtC8UnityAds18UADSInterstitialAd show:delegate:` at game over
+- The supplied delegate responds to `showDidStart:` / `showDidComplete:with:`;
+  the game returns to normal play with no playable. Test multiple game overs.
+
+The old unmangled-class NG is not the new hook's result. If no new BLOCKED entry
+appears, the actual call path remains unconfirmed; attach the full updated log.

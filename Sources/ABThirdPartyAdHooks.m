@@ -816,6 +816,17 @@ static void AB_FBRewardedVideoAd_showAdFromRootViewController_animated(id self, 
     ABNotifyFBRewardDelegate(self);
 }
 
+/// 新しいUnity Adsのインタースティシャル。delegateはUnityAdsShowDelegateではなく
+/// UADSInterstitialShowDelegate。第1引数は広告オブジェクト自身で、placementIdではない。
+/// ISUADSInterstitialShowDelegateの実装では完了状態はログ用で、終了処理は状態によらない。
+static void AB_UADSInterstitialAd_show_delegate(id self, SEL _cmd, id viewController, id delegate) {
+    ABLogBlocked(self, _cmd);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ABCallDelegate1(delegate, NSSelectorFromString(@"showDidStart:"), self);
+        ABCallDelegate1ThenInteger(delegate, NSSelectorFromString(@"showDidComplete:with:"), self, 2);
+    });
+}
+
 /// Unity Ads本体(UADSRewardedAd)。show:delegate:の第2引数にそのままdelegateが渡ってくるので、
 /// self.delegateを探す必要はない。プロトコルの正確なメソッド名は確証が薄いため、
 /// 名前の異なりうる複数候補を試すベストエフォート実装。
@@ -1607,6 +1618,10 @@ void ABInstallThirdPartyAdHooks(void) {
     // AppLovin MAXのALUnityAdsMediationAdapter経由でも、結局この2クラスのshow:delegate:が呼ばれる。
     ABLogSwizzle(@"UADSInterstitialAd.show:delegate:",
                  ABSwizzleInstanceMethod(@"UADSInterstitialAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_NoOp_WithArgArg, kTypesArgArg));
+    // 2048 v4.0.8で確認したSwiftの実ランタイム名。旧名とは別にインストールする。
+    // サフィックス探索で別の同名クラスを先に拾って成功キャッシュに入れる問題も避ける。
+    ABLogSwizzle(@"_TtC8UnityAds18UADSInterstitialAd.show:delegate:",
+                 ABSwizzleInstanceMethod(@"_TtC8UnityAds18UADSInterstitialAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_UADSInterstitialAd_show_delegate, kTypesArgArg));
     ABLogSwizzle(@"UADSRewardedAd.show:delegate:",
                  ABSwizzleInstanceMethod(@"UADSRewardedAd", NSSelectorFromString(@"show:delegate:"), (IMP)AB_UADSRewardedAd_show_delegate, kTypesArgArg));
     ABInstallHideBannerHookSet(@"UADSBannerView",

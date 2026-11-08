@@ -374,3 +374,25 @@ hook set, hiding itself and descendants. Use NO_REMOVE to avoid breaking externa
 Auto Layout constraints; leave ancestors, siblings and frames untouched. The known
 limitation of a reserved empty banner slot still applies. Networking, initialization,
 loading, app-specific classes and generic WKWebView implementations are untouched.
+
+### Missed Swift runtime name for Unity Ads interstitials
+
+The third device log confirms banner interception, but neither the UnityAds static
+show nor the ironSource adapter show fires. The old `UADSInterstitialAd.show:delegate:`
+installation stays NG. Rechecking the IPA class list identifies the actual runtime
+name `_TtC8UnityAds18UADSInterstitialAd`, with `show:delegate:` encoded as
+`v32@0:8@16@24`. Install a separate hook for that exact name, independently of the
+unmangled legacy class.
+
+Its `UADSInterstitialShowDelegate` uses `showDidStart:` and
+`showDidComplete:with:`, not the legacy `unityAdsShowStart:` selectors. Notify once
+in order on the main queue, passing the ad itself. The completion argument uses
+integer 2, as in the existing Unity notifications. Disassembly of the IPA's
+`ISUADSInterstitialShowDelegate` confirms the first argument is unused and the
+state is logged but does not gate close handling. Other delegates' interpretation
+of that state still requires device testing.
+
+Do not extend this fix to the Swift rewarded class. Initialization, load, network,
+banner and generic WebView behavior are unchanged. Runtime name and ABI have been
+statically checked; hook firing and repeated game continuation still need testing
+with a rebuilt dylib.

@@ -39,7 +39,7 @@ See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for how it works under the hood
 | InMobi | `IMInterstitial` / `IMBanner` | No-ops the show call, hides the banner |
 | AdSurgeSDK (AppLovin MAX custom mediation network, Tencent GDT-based) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | No-ops the show call, hides the banner |
 | Moloco | `PublisherFullscreenAd` (shared Interstitial/Rewarded implementation) / `MolocoBannerAdView` | No-ops the show call, hides the banner |
-| Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | No-ops show/displayBanner, hides the banner |
+| Unity Ads itself (SDK 4.x) | `UADSInterstitialAd` (Swift: `_TtC8UnityAds18UADSInterstitialAd`) / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | No-ops show/displayBanner, hides the banner |
 | Unity Ads itself (legacy static API) | `UnityAds` class methods `show:placementId:showDelegate:` / `show:placementId:options:` / `show:placementId:options:showDelegate:` | No-ops the show call |
 | Smaato (an Appodeal mediation destination) | `SMAInterstitial` / `SMARewardedInterstitial` / `SMABannerView` | No-ops the show call, hides the banner |
 | Pangle (ByteDance/TikTok) | `PAGInterstitialAd` / `PAGLInterstitialAd` / `PAGRewardedAd` / `PAGBannerAd` | No-ops the show call, hides the banner |
