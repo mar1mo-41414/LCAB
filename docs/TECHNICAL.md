@@ -368,3 +368,22 @@ SDKの内部状態とゲーム進行が維持されるかは実機での確認�
 自身と子孫を非表示にします。外部Auto Layout制約との衝突を避けるためNO_REMOVE版を使い、
 親・兄弟の変更やframeの変更はしません。広告枠だけが残る既知の制約は引き続きあります。
 通信・初期化・ロード、アプリ固有クラス、汎用WKWebViewの実装には触れていません。
+
+### Unity Ads Swift実クラス名の取りこぼし
+
+3回目のログでは、バナーのBLOCKEDは発火する一方、UnityAds静的APIと
+ISUnityAdsAdapterのshowは発火していませんでした。また、既存の
+`UADSInterstitialAd.show:delegate:`はNGのままです。IPAのクラスリストを再確認すると、
+実際は `_TtC8UnityAds18UADSInterstitialAd` (`show:delegate:` / `v32@0:8@16@24`)
+として登録されていました。従来の非マングル名とは独立して、この名前にもフックを追加します。
+
+delegateのプロトコルは `UADSInterstitialShowDelegate` で、旧静的APIの
+`unityAdsShowStart:`ではなく `showDidStart:` / `showDidComplete:with:` です。
+メインキューで広告自身を渡して開始→終了を一度ずつ通知します。完了引数は既存の
+Unity通知と同じ整数2を使用します。IPA内の `ISUADSInterstitialShowDelegate` の
+逆アセンブルでは、第1引数は使われず、状態はログ出力だけに使われ、終了処理は
+状態によらず実行されることを確認しました。他のdelegateの状態解釈は実機確認が必要です。
+
+この修正ではSwiftリワードクラスに同じフックを拡大しません。初期化・ロード・通信、
+バナーや汎用WebViewの処理にも変更はありません。クラス名とABIの静的確認はできましたが、
+実際のBLOCKED発火と複数回のゲーム進行は新ビルドで確認する必要があります。
