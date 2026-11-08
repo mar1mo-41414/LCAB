@@ -826,6 +826,20 @@ static void AB_UADSRewardedAd_show_delegate(id self, SEL _cmd, id viewController
     ABCallDelegate1(delegate, NSSelectorFromString(@"unityAdsShowStart:"), nil);
 }
 
+/// optionsを省略するUnity Ads静的API。2048 v4.0.8のUnityFramework内で
+/// +show:placementId:showDelegate: (v40@0:8@16@24@32)を確認。
+/// Swift内部で別のshowへ直接委譲される場合、options付きのObjC入口のフックだけでは
+/// 捕捉できない。ロード/初期化には触れず、この表示入口自体を止める。
+static void AB_UnityAdsClass_show_placementId_showDelegate(id self, SEL _cmd, id viewController, id placementId, id showDelegate) {
+    ABLogBlocked(self, _cmd);
+    // showから戻った後、メインキューで正規の開始→完了を一度ずつ通知する。
+    // placementIdとdelegateはブロックで保持する。クリック/ロード完了は捏造しない。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ABCallDelegate1(showDelegate, NSSelectorFromString(@"unityAdsShowStart:"), placementId);
+        ABCallDelegate1ThenInteger(showDelegate, NSSelectorFromString(@"unityAdsShowComplete:withFinishState:"), placementId, 2 /* kUnityAdsShowCompletionStateCompleted */);
+    });
+}
+
 /// Unity Ads本体のレガシー静的API `+[UnityAds show:placementId:options:showDelegate:]`。
 /// 第4引数がdelegate。素のUnityAdsShowDelegateプロトコル(unityAdsShowStart:/
 /// unityAdsShowComplete:withState:、Unity公式ドキュメントに基づく)を第一候補として試すが、
@@ -1589,6 +1603,9 @@ void ABInstallThirdPartyAdHooks(void) {
     // `+[UnityAds show:placementId:options:showDelegate:]`というクラスメソッド(インスタンスではない)。
     // UnityAdsクラス自体はSwift実装のためランタイム上の名前がSDKバージョンでマングルされうる
     // (実測値: `_TtC8UnityAds8UnityAds`)ためサフィックス一致で解決する。
+    // optionsなしの入口も個別にフックする(Swift内部呼出しはObjCの別入口を通るとは限らない)。
+    ABLogSwizzle(@"*UnityAds(class).show:placementId:showDelegate:",
+                 ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:showDelegate:"), (IMP)AB_UnityAdsClass_show_placementId_showDelegate, kTypesArgArgArg));
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:",
                  ABSwizzleClassMethodBySuffix(@"UnityAds", NSSelectorFromString(@"show:placementId:options:"), (IMP)AB_NoOp_WithArgArgArg, kTypesArgArgArg));
     ABLogSwizzle(@"*UnityAds(class).show:placementId:options:showDelegate:",

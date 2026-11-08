@@ -37,7 +37,7 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 | AdSurgeSDK(AppLovin MAXのカスタムメディエーション、Tencent GDTベース) | `AdSurgeInterstitialAd` / `AdSurgeRewardedAd` / `AdSurgeAppOpenAd` / `AdSurgeBannerAdView` | show系をno-op化、バナーは非表示化 |
 | Moloco | `PublisherFullscreenAd`(Interstitial/Rewarded共用実体) / `MolocoBannerAdView` | show系をno-op化、バナーは非表示化 |
 | Unity Ads本体(SDK 4.x系) | `UADSInterstitialAd` / `UADSRewardedAd` / `UADSBannerView` / `UADSBannerWrapperView` / `UADSBannerAd` | show/displayBanner系をno-op化、バナーは非表示化 |
-| Unity Ads本体(レガシー静的API) | `UnityAds`クラスメソッド `show:placementId:options:` / `show:placementId:options:showDelegate:` | show系をno-op化 |
+| Unity Ads本体(レガシー静的API) | `UnityAds`クラスメソッド `show:placementId:showDelegate:` / `show:placementId:options:` / `show:placementId:options:showDelegate:` | show系をno-op化 |
 | Smaato(Appodealのメディエーション先) | `SMAInterstitial` / `SMARewardedInterstitial` / `SMABannerView` | show系をno-op化、バナーは非表示化 |
 | Pangle(ByteDance/TikTok系) | `PAGInterstitialAd` / `PAGLInterstitialAd` / `PAGRewardedAd` / `PAGBannerAd` | show系をno-op化、バナーは非表示化 |
 | Vungle Ads SDK(新API) | `VungleAdsSDK.VungleInterstitial` / `VungleAdsSDK.VungleRewarded` / `VungleAdsSDK.VungleBannerView` | show系をno-op化、バナーは非表示化 |

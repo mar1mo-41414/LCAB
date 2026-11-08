@@ -330,3 +330,23 @@ make
 ```
 
 Produces `.theos/obj/debug/LCAdBlocker.dylib`. Release build: `make FINALPACKAGE=1`.
+
+## Unity Ads show overload without options
+
+Objective-C metadata in the UnityFramework bundled with 2048
+(`com.ketchapp.2048` v4.0.8) confirms the class method
+`+[_TtC8UnityAds8UnityAds show:placementId:showDelegate:]`, encoded as
+`v40@0:8@16@24@32`. Hook this entry separately, with runtime existence checks:
+Swift delegation need not pass through the options overload's Objective-C entry.
+
+The hook blocks presentation and asynchronously notifies the supplied delegate on
+the main queue: `unityAdsShowStart:`, then
+`unityAdsShowComplete:withFinishState:` with completed state `2`, once each.
+It preserves the placement ID and skips nil/non-conforming delegates. Existing
+options-overload compatibility handling is unchanged. The new path does not fake
+load/click events or try multiple finish states. No app-specific condition,
+network/init/load interception, or generic WebView hiding is introduced.
+
+The supplied log shows a playable presentation, but invocation of this overload
+and game continuation after blocking still need device verification. See
+[Tests/README.md](../Tests/README.md) for the regression harness and acceptance checks.

@@ -1,0 +1,32 @@
+# Unity Ads show regression harness
+
+On macOS with Xcode and an already booted iOS Simulator (no ad SDK required):
+
+```sh
+SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+ARCH=$(uname -m)
+xcrun --sdk iphonesimulator clang -arch "$ARCH" \
+  -isysroot "$SDK" -mios-simulator-version-min=15.0 -fobjc-arc \
+  -ISources Tests/UnityAdsShowTests.m Sources/ABThirdPartyAdHooks.m \
+  Sources/ABSwizzle.m Sources/ABDebugLog.m \
+  -framework Foundation -framework UIKit -framework AVFoundation \
+  -o /tmp/LCABUnityAdsShowTests
+xcrun simctl spawn booted /tmp/LCABUnityAdsShowTests
+```
+
+Checks missing SDK / late class registration, repeated installation, interception
+of the three-object-argument class method, asynchronous ordered callbacks on the
+main queue, placement preservation, completed state `2`, and nil/non-conforming
+delegates. This is a mock-runtime test, not proof of behavior in a real mediation SDK.
+
+Device acceptance check (2048 v4.0.8 under LiveContainer):
+
+1. Inject the rebuilt dylib and restart the app.
+2. Confirm `[INSTALL] *UnityAds(class).show:placementId:showDelegate: -> OK`.
+3. Play until game over; confirm the matching `[BLOCKED]` entry, no playable
+   presentation, and that restart/next-game controls still work. Repeat several times.
+4. Check other ad flows, particularly voluntary rewarded ads, still return control.
+5. If a playable still appears, collect the new log; do not hide generic WKWebViews
+   or block networking as a fallback.
+
+The Linux development environment cannot compile or execute this Apple SDK harness.
