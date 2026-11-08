@@ -328,3 +328,21 @@ make
 ```
 
 成果物は`.theos/obj/debug/LCAdBlocker.dylib`。リリースビルドは`make FINALPACKAGE=1`。
+
+## Unity Adsのoptions省略show入口
+
+2048 (`com.ketchapp.2048` v4.0.8) のIPAに含まれるUnityFrameworkのObjective-C
+メタデータで、`_TtC8UnityAds8UnityAds` のクラスメソッド
+`show:placementId:showDelegate:` (型 `v40@0:8@16@24@32`) を確認しました。
+既存のoptions付き入口とは別に、この入口も存在確認付きでフックします。
+Swift内部からの委譲が別のObjective-C入口を通るとは限らないためです。
+
+表示を止め、メインキューへ非同期で `unityAdsShowStart:` →
+`unityAdsShowComplete:withFinishState:` (completed = 2) を一度ずつ通知します。
+placementIdを保持し、nil/未実装delegateはスキップします。既存のoptions付き経路の
+互換処理は変更せず、新経路ではロード完了やクリックの通知、複数の完了状態の試行はしません。
+アプリ固有の分岐、通信・初期化・ロードへの介入、汎用WebViewの非表示化は追加していません。
+
+添付ログはプレイアブルの表示を示しますが、この入口の実際の呼出しとブロック後の
+ゲーム進行は実機で再確認が必要です。回帰ハーネスと確認手順は
+[Tests/README.md](../Tests/README.md) を参照してください。
