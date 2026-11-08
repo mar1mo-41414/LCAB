@@ -15,7 +15,7 @@ See [docs/TECHNICAL-EN.md](docs/TECHNICAL-EN.md) for how it works under the hood
 - **Does not interfere with the app's own network traffic in any way.** Only the "present an ad"
   trigger methods are hooked — the networking layer (URLSession, etc.) and the ad SDK's
   initialization/load logic are left untouched.
-- Ads that are the app's own bespoke implementation (e.g. embedded ads that don't
+- Ads that are the app's own bespoke implementation (e.g. YouTube-style embedded ads that don't
   go through a shared SDK class) are out of scope.
 - No jailbreak required. Works via LiveContainer's in-process dylib injection (does not depend on
   CydiaSubstrate).
