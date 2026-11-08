@@ -28,6 +28,9 @@ static void OriginalShow(id self, SEL cmd, id vc, id placement, id delegate) {
     NSCAssert(placement == self.placement && state == 2, @"placement/completed enum mismatch");
     [self.events addObject:@"complete"];
 }
+- (void)adapterInterstitialDidOpen { [self.events addObject:@"open"]; }
+- (void)adapterInterstitialDidShow { [self.events addObject:@"show"]; }
+- (void)adapterInterstitialDidClose { [self.events addObject:@"close"]; }
 @end
 
 int main(void) {
@@ -56,6 +59,36 @@ int main(void) {
         ((void (*)(id, SEL, id, id, id))objc_msgSend)(cls, show, nil, placement, [NSObject new]);
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
         NSCAssert(originalCalls == 0, @"original show must never run");
+        Class adapterClass = objc_allocateClassPair([NSObject class], "ISUnityAdsAdapter", 0);
+        SEL adapterShow = NSSelectorFromString(@"showInterstitialWithViewController:adapterConfig:delegate:");
+        class_addMethod(adapterClass, adapterShow, (IMP)OriginalShow, "v@:@@@");
+        objc_registerClassPair(adapterClass);
+        Class bannerClass = objc_allocateClassPair([UIView class], "LPMBannerAdView", 0);
+        objc_registerClassPair(bannerClass);
+        ABInstallThirdPartyAdHooks();
+        ABInstallThirdPartyAdHooks();
+        ShowDelegate *adapterDelegate = [ShowDelegate new];
+        id adapter = [adapterClass new];
+        ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, @"config", adapterDelegate);
+        NSCAssert(adapterDelegate.events.count == 0, @"adapter callback must be asynchronous");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        NSCAssert([adapterDelegate.events isEqual:@[@"open", @"show", @"close"]], @"adapter callback order/count");
+        ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, nil, nil);
+        ((void (*)(id, SEL, id, id, id))objc_msgSend)(adapter, adapterShow, nil, nil, [NSObject new]);
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        NSCAssert(originalCalls == 0, @"adapter original show must not run");
+        UIView *parent = [UIView new];
+        UIView *sibling = [UIView new];
+        UIView *banner = [bannerClass new];
+        [parent addSubview:sibling];
+        [parent addSubview:banner];
+        banner.hidden = NO;
+        banner.alpha = 1;
+        [banner layoutSubviews];
+        NSCAssert(banner.hidden && banner.layer.hidden && banner.layer.opacity == 0, @"banner must remain hidden");
+        NSCAssert(banner.superview == parent && !parent.hidden && !sibling.hidden, @"must not remove banner or hide unrelated UI");
+        sibling.hidden = NO;
+        NSCAssert(!sibling.hidden, @"UIView inherited implementation must remain intact");
         NSLog(@"Unity Ads show tests passed");
     }
     return 0;

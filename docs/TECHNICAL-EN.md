@@ -350,3 +350,27 @@ network/init/load interception, or generic WebView hiding is introduced.
 The supplied log shows a playable presentation, but invocation of this overload
 and game continuation after blocking still need device verification. See
 [Tests/README.md](../Tests/README.md) for the regression harness and acceptance checks.
+
+## Unity Ads through ironSource / LevelPlay and the new banner
+
+The follow-up 2048 v4.0.8 log shows successful UnityAds hook installation but no
+BLOCKED calls while a playable is visible. The previous overload alone is therefore
+insufficient. Objective-C metadata in the supplied UnityFramework confirms:
+
+- `ISUnityAdsAdapter.showInterstitialWithViewController:adapterConfig:delegate:`
+  (`v40@0:8@16@24@32`)
+- No-argument `ISInterstitialAdapterDelegate` callbacks
+  `adapterInterstitialDidOpen`, `adapterInterstitialDidShow`, `adapterInterstitialDidClose`
+- `LPMBannerAdView`, also seen visible with a child in the follow-up log.
+
+Block the adapter's show trigger and asynchronously notify open/show/close once
+each on the main queue, covering presentation that bypasses UnityAds ObjC entry
+points. No load, click, or reward callbacks are added; rewarded show is unchanged.
+Actual invocation of this adapter entry and SDK/game state after blocking still
+require device verification.
+
+The banner uses the existing didMoveToWindow/setHidden:/layoutSubviews/setAlpha:
+hook set, hiding itself and descendants. Use NO_REMOVE to avoid breaking external
+Auto Layout constraints; leave ancestors, siblings and frames untouched. The known
+limitation of a reserved empty banner slot still applies. Networking, initialization,
+loading, app-specific classes and generic WKWebView implementations are untouched.
