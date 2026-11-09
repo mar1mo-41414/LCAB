@@ -410,3 +410,20 @@ Unity通知と同じ整数2を使用します。IPA内の `ISUADSInterstitialSho
 他のメディエーション経路やリワード全般の動作、Swift入口の発火は別途確認対象です。
 Simulator用mockハーネスは実機確認とは別で、この開発環境では未実行です。
 実装・ビルド設定への追加変更はなく、本更新は確認結果の文書化のみです。
+
+## AdMobリワードの表示・終了通知
+
+全Tweak無効時には動作する報酬操作について、有効時の失敗直後のログ末尾に
+`GADRewardedAd.presentFromRootViewController:userDidEarnRewardHandler:` のBLOCKEDを確認しました。
+従来は報酬ハンドラだけを同期呼出ししており、メディエーション側に表示・終了が伝わらない
+可能性がありました。取得失敗という画面表示だけで通信障害とは判断しません。
+
+`fullScreenContentDelegate` を取得し、メインキューで非同期に
+`adWillPresentFullScreenContent:` → 報酬ハンドラ →
+`adWillDismissFullScreenContent:` → `adDidDismissFullScreenContent:` を通知します。
+広告自身を引数に渡し、未実装の任意メソッド・nilはスキップします。クリック・インプレッション・
+ロード成功は捏造しません。初期化・ロード・通信・他SDKの表示処理は変更しません。
+
+セレクタは[GoogleのGADFullScreenContentDelegate仕様](https://developers.google.com/admob/ios/api/reference/Protocols/GADFullScreenContentDelegate)
+に基づきます。will-dismissは非推奨ですが、旧SDKの互換用に存在する場合のみ通知します。
+これは状態通知の欠落に対する修正であり、今回の症状の解消・報酬付与・再試行は実機で要確認です。

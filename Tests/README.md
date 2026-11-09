@@ -88,3 +88,19 @@ Simulator harness test. Repeated game overs, refresh/rotation coverage, other
 mediation/rewarded flows and native Swift callbacks are not established by this log.
 The earlier sections describe mock coverage and checks for individual paths; they
 are not requirements for every hook to fire in one device run.
+
+## AdMob rewarded lifecycle regression
+
+Build `Tests/GADRewardedTests.m` instead of `Tests/UnityAdsShowTests.m` in the
+Simulator command above (use a separate output name). It mocks `GADRewardedAd`
+and verifies blocked presentation, idempotent installation, asynchronous main-queue
+will-present → reward → will-dismiss → did-dismiss order, ad identity, one reward
+per invocation, nil handler/delegate and missing optional methods. Click and
+impression callbacks must not be synthesized.
+
+On device, first confirm the failing reward action works with all Tweaks disabled.
+Then reproduce with LCAB enabled. Look for the AdMob BLOCKED entry, the actual
+`fullScreenContentDelegate` class, reward-handler and dismissal notifications.
+Verify both reward delivery and return to normal UI, including a second reward
+request. If the failure persists, collect the log immediately after the same action;
+mock lifecycle success is not proof that every mediation adapter accepts it.

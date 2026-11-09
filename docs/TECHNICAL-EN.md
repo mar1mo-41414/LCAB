@@ -419,3 +419,22 @@ bottom-banner hiding. Repeated game overs, other mediation paths, rewarded flows
 and the Swift entry firing remain separate verification items. The Simulator mock
 harness has not been executed in this development environment. This update only
 documents the outcome; implementation and build settings are unchanged.
+
+## AdMob rewarded presentation and dismissal lifecycle
+
+For a reward action that works with all Tweaks disabled, the supplied failure log
+ends at `GADRewardedAd.presentFromRootViewController:userDidEarnRewardHandler:`
+BLOCKED. Previously only the reward handler ran synchronously; mediation may not
+have received the presentation/dismissal lifecycle. An on-screen acquisition error
+alone does not establish a network failure.
+
+Read `fullScreenContentDelegate` and asynchronously notify on the main queue:
+`adWillPresentFullScreenContent:` → reward handler →
+`adWillDismissFullScreenContent:` → `adDidDismissFullScreenContent:`.
+Pass the actual ad and skip nil/missing optional methods. Do not synthesize clicks,
+impressions or loads. Initialization, loading, networking and other SDKs are unchanged.
+
+Selectors follow [Google's delegate reference](https://developers.google.com/admob/ios/api/reference/Protocols/GADFullScreenContentDelegate).
+Will-dismiss is deprecated but is sent when implemented for older SDK compatibility.
+This addresses missing lifecycle notifications; resolution of the reported error,
+reward delivery and subsequent attempts still require device verification.
