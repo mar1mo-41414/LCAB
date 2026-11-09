@@ -792,13 +792,24 @@ static void ABInstallMAXRewardedAutoClose(void) {
     }
 }
 
-/// Google AdMob GADRewardedAd。ブロックを直接引数で受け取るのでdelegate探索は不要、
-/// handler(呼べば報酬付与)をそのまま呼ぶだけでよい。
+/// AdMobの報酬ハンドラだけではメディエーション側の表示/終了状態が更新されない。
+/// fullScreenContentDelegateへ表示→報酬→終了を通知する。SDKのロードや通信には触れない。
 static void AB_GADRewardedAd_present(id self, SEL _cmd, id viewController, void (^handler)(void)) {
     ABLogBlocked(self, _cmd);
-    if (handler) {
-        handler();
-    }
+    SEL getter = NSSelectorFromString(@"fullScreenContentDelegate");
+    id delegate = [self respondsToSelector:getter] ? ((id (*)(id, SEL))objc_msgSend)(self, getter) : nil;
+    ABDebugLog(@"[REWARD]   GADRewardedAd.fullScreenContentDelegate = %@", delegate ? NSStringFromClass([delegate class]) : @"nil");
+    // 実際のpresent同様、show呼出しから戻ってからメインキューで通知する。
+    // 広告・delegate・報酬ハンドラは通知が終わるまでブロックで保持する。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adWillPresentFullScreenContent:"), self);
+        if (handler) {
+            ABDebugLog(@"[REWARD]   GADRewardedAd invoking reward handler");
+            handler();
+        }
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adWillDismissFullScreenContent:"), self);
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adDidDismissFullScreenContent:"), self);
+    });
 }
 
 /// Meta Audience Network FBRewardedVideoAd。
