@@ -118,3 +118,9 @@
 - 全画面広告が出るタイミングのクラッシュでも、ログ末尾がバナーのdidMoveToWindowなら、まずバナーの切り離し・外部制約との衝突も確認します。removeFromSuperview自体が再度のwindow移動通知を生むため、通知の反復を広告の再表示と即断しません。
 - AdMobバナーは階層から外さず非表示にするNO_REMOVE版を使います。詳細は技術資料の「AdMobバナーの階層維持」を参照してください。
 - クラッシュ原因の確定にはLCABログだけでなく同じ実行のiOS解析データ（.ips）が必要です。安全化の修正と原因確定・実機解消確認を区別します。
+
+### 調査知見：LiveContainerのクラッシュレポートの照合
+
+- `.ips` のプロセス名がLiveContainerでも、usedImagesのゲスト実行ファイル・LCAB、procLaunch/captureTimeとLCABログの時刻を照合して対象実行か確認します。
+- SIGABRTの通常スタックだけでなく `lastExceptionBacktrace` を確認します。CoreAutoLayoutの制約変更中の例外でも、理由文なしに「共通祖先がない」等の例外理由までは断定しません。
+- 未シンボル化フレームはusedImagesのUUIDと解析対象Mach-OのLC_UUIDを照合してからimageOffsetで調べます。修正前の時刻のレポートを修正後の再発証拠とは扱いません。

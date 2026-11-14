@@ -454,3 +454,23 @@ remain available. Networking, loading, fullscreen ads and reward callbacks are
 unchanged. A reserved blank slot may remain. Resolution of the reported crash is
 not yet device-verified; if it persists, obtain the matching `.ips` and inspect the
 exception, triggered thread and backtrace rather than inferring cause from the last log.
+
+### Correlating the launch crash report
+
+A subsequently supplied `.ips` matches the earlier LCAB log's launch/crash times
+and lists both the guest executable and LCAB in loaded images. A LiveContainer
+process name does not rule out a guest-app launch crash.
+
+The exception is `EXC_CRASH / SIGABRT`. `lastExceptionBacktrace` records
+`objc_exception_throw`, CoreAutoLayout's
+`+[NSLayoutConstraint _addOrRemoveConstraints:activate:]`, and an unsymbolicated
+app-binary frame on the main queue. This establishes an exception during constraint
+modification and is consistent with preserving the banner hierarchy. It does not
+establish a specific missing-common-ancestor exception or direct LCAB call: the
+exception reason and app-frame symbol are unavailable. LCAB's absence from this
+stack also does not exclude effects of an earlier view change.
+
+For symbolication, match the usedImages UUID to the binary's LC_UUID and use
+imageOffset, not an ASLR-adjusted absolute address. This report corresponds to the
+earlier run, not evidence of recurrence after NO_REMOVE. Verify launch with the
+fix; if it still fails, collect a new LCAB log and `.ips` from the same run.
