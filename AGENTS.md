@@ -129,3 +129,8 @@
 
 - 全画面GADWebAdViewが見えていても、GADInterstitialAd経由とは限りません。Googleの起動時広告GADAppOpenAdは別クラスの表示入口なので、既存interstitialフックの登録成功だけで対応済みとしません。
 - App Open対応の詳細は技術資料を参照してください。描画クラスや起動時というタイミングは候補を絞る情報であり、実際の入口はBLOCKEDの発火で確認します。
+
+### 調査知見：MAXの自動終了が予約されない場合
+
+- MARewardedAdのPASSTHROUGH後に自動終了ログがない場合、didDisplayAdの対象がUnity用delegateだけになっていないか確認します。SDK共通のdelegate取得経路を使い、アプリ名や特定のRootViewControllerへ固定フックしません。
+- 実delegateをラップする場合は元IMP・継承・super呼出し・同じクラスの非対象インスタンスを保護し、リワード待機状態と広告formatで予約を限定します。遅延中に別画面へ移る可能性にも注意し、不明なVCを無条件に閉じません。

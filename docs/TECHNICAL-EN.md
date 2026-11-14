@@ -497,3 +497,22 @@ implement will-present/will-dismiss but does implement did-dismiss; the log reco
 longer appears. This establishes the entry used and suppression for the reported
 flow, not repeated launches or subsequent foregrounding. No generic webviews
 were hidden and no arbitrary screens were dismissed.
+
+## MAX rewarded delegates outside Unity
+
+A persistent AppLovin rewarded-ad log shows passthrough at each MARewardedAd show
+entry but no auto-close scheduling. Previously the display callback hook only
+covered MAUnityAdManager, potentially missing native delegates.
+
+Before each rewarded show, obtain the actual delegate and wrap its existing
+didDisplayAd: method. Do not hardcode app identities. Capture each class's original
+IMP in its own block. Preserve original delivery, then schedule existing reward/
+seek/close logic only for a pending instance and REWARDED MAAd.format, consuming
+the pending state once. Other formats and unarmed instances of the same class do
+not schedule closing. The Unity path remains unchanged.
+
+At delayed execution, process only presented VCs with known ad-SDK prefixes;
+log and skip unknown controllers. Show still passes through, so an ad may be
+visible briefly. Networking, initialization, loading and banners are unchanged.
+Actual auto-close and item reward still need device verification. SDKs changing
+the delegate after show may need further investigation.
