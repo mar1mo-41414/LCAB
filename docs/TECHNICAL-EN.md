@@ -490,6 +490,10 @@ main queue, passing the actual ad and skipping absent optional methods. Do not
 emit reward, click or impression events. Networking, initialization, loading,
 banners and other fullscreen entry points are unchanged.
 
-Whether the reported overlay uses this entry is not yet device-verified. Confirm
-BLOCKED firing, startup continuation and subsequent foregrounding, not just
-installation OK. Do not hide generic webviews or dismiss arbitrary screens.
+The follow-up `lcadblocker-9.log` confirms both installation and BLOCKED firing
+for this entry. Its `fullScreenContentDelegate`, `RootViewController`, does not
+implement will-present/will-dismiss but does implement did-dismiss; the log records
+`adDidDismissFullScreenContent:` being called. The user also confirmed the ad no
+longer appears. This establishes the entry used and suppression for the reported
+flow, not repeated launches or subsequent foregrounding. No generic webviews
+were hidden and no arbitrary screens were dismissed.

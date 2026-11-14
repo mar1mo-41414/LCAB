@@ -476,6 +476,9 @@ NO_REMOVE版へ切り替えます。
 一度ずつ通知します。広告自身を渡し、任意メソッド未実装はスキップします。報酬・クリック・
 インプレッションは通知しません。通信・初期化・ロード・バナー・他の全画面入口は変更しません。
 
-今回の残存広告がこの入口を使用するかは実機未確認です。INSTALL成功のみで解消とせず、
-BLOCKED発火・起動完了・再フォアグラウンドを確認してください。汎用WebViewの非表示や
-画面の無条件dismissは行いません。
+追試ログ `lcadblocker-9.log` では、この入口のINSTALL成功とBLOCKED発火を確認しました。
+`fullScreenContentDelegate` の `RootViewController` はwill-present/will-dismissを実装せず、
+`adDidDismissFullScreenContent:` のみ実装しており、その呼出しが記録されています。
+利用者からも「広告は出なくなった」と確認を得ました。これにより今回の表示入口の特定と
+広告抑止を確認できました。再フォアグラウンドや複数回連続の動作はこの報告だけでは
+確認済みとしません。汎用WebViewの非表示や画面の無条件dismissは行っていません。
