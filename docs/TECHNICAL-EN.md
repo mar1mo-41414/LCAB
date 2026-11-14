@@ -438,3 +438,19 @@ Selectors follow [Google's delegate reference](https://developers.google.com/adm
 Will-dismiss is deprecated but is sent when implemented for older SDK compatibility.
 This addresses missing lifecycle notifications; resolution of the reported error,
 reward delivery and subsequent attempts still require device verification.
+
+## Preserving the AdMob banner hierarchy
+
+A launch-crash log from a run that works without Tweaks ends with
+`GADBannerView didMoveToWindow`, `setHidden:YES`, then another `didMoveToWindow`.
+The old hook removes the banner during the window notification, so LCAB's own
+removal can produce that sequence. Without an exception/backtrace this is not
+proof of the crash cause. As a conservative safety change, use the existing
+NO_REMOVE variant for AdMob to avoid disrupting SDK ownership and external constraints.
+
+Keep recursive hidden/layer opacity enforcement and hidden/alpha write protection.
+Do not alter parents, siblings or frames; normal SDK/app attachment and removal
+remain available. Networking, loading, fullscreen ads and reward callbacks are
+unchanged. A reserved blank slot may remain. Resolution of the reported crash is
+not yet device-verified; if it persists, obtain the matching `.ips` and inspect the
+exception, triggered thread and backtrace rather than inferring cause from the last log.

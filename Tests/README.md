@@ -104,3 +104,19 @@ Then reproduce with LCAB enabled. Look for the AdMob BLOCKED entry, the actual
 Verify both reward delivery and return to normal UI, including a second reward
 request. If the failure persists, collect the log immediately after the same action;
 mock lifecycle success is not proof that every mediation adapter accepts it.
+
+## AdMob banner hierarchy regression
+
+Build `Tests/GADBannerTests.m` in place of `Tests/UnityAdsShowTests.m` in the
+Simulator command above, using a separate executable output name. No ad SDK is
+linked. The harness exercises window attachment with parent-owned constraints,
+original didMoveToWindow delivery, hidden/alpha writes and layout, normal removal
+and reattachment. It asserts LCAB never calls removeFromSuperview, banner content
+stays hidden and unrelated parent/sibling views remain unchanged.
+
+For a launch crash, compare with all Tweaks disabled, collect the LCAB log and the
+matching iOS `.ips` crash report (exception, triggered thread and backtrace).
+A last banner BLOCKED entry localizes activity but does not establish a crash
+cause. After rebuilding, check cold launch, rotation/layout, banner refresh and
+normal game controls. The banner slot may remain reserved. If the crash persists,
+use the crash report rather than broadening UI hooks based only on the last log.
