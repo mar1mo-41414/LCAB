@@ -136,3 +136,19 @@ startup without an overlay, then relaunch/foreground again. If the hook does not
 fire, the app-open hypothesis is unconfirmed: collect the new log and inspect
 other SDK entry points rather than hiding generic webviews. Keep banner hierarchy
 preservation enabled. This new harness has not been run in the Linux environment.
+
+## MAX non-Unity rewarded delegate regression
+
+Build `Tests/MAXRewardedDelegateTests.m` with `Sources/ABSwizzle.m` and
+`Sources/ABDebugLog.m` using the same Simulator flags/frameworks above. **Do not
+also compile ABThirdPartyAdHooks.m**: this harness includes its implementation to
+check pending-state gating. Tests repeated preparation, original callback delivery,
+non-reward formats, an unarmed same-class instance, duplicate callbacks, subclass
+super calls, nil and missing optional callbacks. It does not run the UI timers.
+
+On device, expect the actual rewarded delegate's didDisplayAd installation and
+`[AUTOCLOSE] rewarded delegate … didDisplayAd: -> scheduling auto-dismiss` after
+show passthrough. Verify short presentation/automatic closing, item reward and
+normal controls, then a second reward. Check interstitial/app-open flows separately.
+An unknown presented-controller diagnostic means auto-close was conservatively
+skipped; attach the new log rather than dismissing arbitrary UI.

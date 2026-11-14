@@ -576,6 +576,15 @@ static void ABMAXAutoDismissPresentedViewController(void) {
         top = top.presentedViewController;
     }
     if (top && top != root) {
+        // didDisplay後の遅延中に別画面へ進んだ場合、その画面を閉じない。
+        NSString *name = NSStringFromClass([top class]);
+        BOOL knownAdController = [name hasPrefix:@"AL"] || [name hasPrefix:@"PAG"] ||
+            [name hasPrefix:@"UnityAds."] || [name hasPrefix:@"_TtC8UnityAds"] ||
+            [name hasPrefix:@"Moloco"];
+        if (!knownAdController) {
+            ABDebugLog(@"[AUTOCLOSE] skipping unrecognized presented controller %@", name);
+            return;
+        }
         // tokyo.plott.tes調査用: 強制dismissだけでは「早期スキップ」とみなされ報酬が付与
         // されないと実機で判明したため、まずdismiss対象のViewController(映像広告なら
         // ALAppLovinVideoViewController)の内部構造を1回だけダンプし、AVPlayer等を
@@ -664,15 +673,7 @@ static void ABMAXAutoDismissPresentedViewController(void) {
     }
 }
 
-static IMP ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP = NULL;
-/// MAUnityAdManager(アプリ側=Unity Plugin自身が実装するdelegate)のdidDisplayAd:を横取りし、
-/// SDK自身が「表示開始」を認識した直後に自動クローズをスケジュールする。SDK自身の表示処理
-/// (ViewControllerのpresent)は妨げないため、タイミング監視には正しく捕捉される。
-static void AB_MAUnityAdManager_didDisplayAd_AutoClose(id self, SEL _cmd, id ad) {
-    ABDebugLog(@"[AUTOCLOSE] MAUnityAdManager didDisplayAd: ad=%@ -> scheduling auto-dismiss", ad ? NSStringFromClass([ad class]) : @"nil");
-    if (ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP) {
-        ((void (*)(id, SEL, id))ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP)(self, _cmd, ad);
-    }
+static void ABMAXScheduleRewardedAutoClose(id ad) {
     // プレイアブル(UnityAds.WebViewContainerViewController)は映像広告のALBaseVideoViewController
     // と違い、報酬報告メソッドを自分自身で持っていない。実機のクラス一覧スキャンで
     // ALUnityAdsRewardedDelegate(AppLovin MAX自前のUnity Adsメディエーションアダプタ
@@ -708,22 +709,80 @@ static void AB_MAUnityAdManager_didDisplayAd_AutoClose(id self, SEL _cmd, id ad)
     });
 }
 
+static IMP ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP = NULL;
+/// MAUnityAdManager(アプリ側=Unity Plugin自身が実装するdelegate)のdidDisplayAd:を横取りし、
+/// SDK自身が「表示開始」を認識した直後に自動クローズをスケジュールする。SDK自身の表示処理
+/// (ViewControllerのpresent)は妨げないため、タイミング監視には正しく捕捉される。
+static void AB_MAUnityAdManager_didDisplayAd_AutoClose(id self, SEL _cmd, id ad) {
+    ABDebugLog(@"[AUTOCLOSE] MAUnityAdManager didDisplayAd: ad=%@ -> scheduling auto-dismiss", ad ? NSStringFromClass([ad class]) : @"nil");
+    if (ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP) {
+        ((void (*)(id, SEL, id))ABOriginalMAUnityAdManagerDidDisplayAdForAutoCloseIMP)(self, _cmd, ad);
+    }
+    ABMAXScheduleRewardedAutoClose(ad);
+}
+
+// 実際にMARewardedAd.delegateとして渡されたクラスだけを観測する。
+// クラス名でアプリを識別せず、元IMPをクラスごとのblockに閉じ込めて継承時の再帰を防ぐ。
+static char ABMAXRewardedDisplayPendingKey;
+static void ABMAXPrepareRewardedDelegate(id rewardedAd) {
+    id delegate = ABGetDelegate(rewardedAd);
+    if (!delegate) return;
+    Class unity = NSClassFromString(@"MAUnityAdManager");
+    if (unity && [delegate isKindOfClass:unity]) return; // 既存のUnity経路と二重予約しない
+    SEL selector = NSSelectorFromString(@"didDisplayAd:");
+    Class cls = object_getClass(delegate);
+    Method method = class_getInstanceMethod(cls, selector);
+    if (!method) return; // 任意通知を新規追加しない
+    static NSMutableSet<NSValue *> *installed;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ installed = [NSMutableSet set]; });
+    @synchronized (installed) {
+        NSValue *key = [NSValue valueWithPointer:(__bridge const void *)cls];
+        if (![installed containsObject:key]) {
+            IMP original = method_getImplementation(method);
+            IMP replacement = imp_implementationWithBlock(^(id receiver, id ad) {
+                BOOL shouldClose = [ABMAXFormatKeyForAd(ad) isEqualToString:@"REWARDED"] &&
+                    [objc_getAssociatedObject(receiver, &ABMAXRewardedDisplayPendingKey) boolValue];
+                if (shouldClose) {
+                    // showの多段委譲や同じ通知の再送でも一度だけ予約する。
+                    objc_setAssociatedObject(receiver, &ABMAXRewardedDisplayPendingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                ((void (*)(id, SEL, id))original)(receiver, selector, ad);
+                if (shouldClose) {
+                    ABDebugLog(@"[AUTOCLOSE] rewarded delegate %@ didDisplayAd: -> scheduling auto-dismiss", NSStringFromClass([receiver class]));
+                    ABMAXScheduleRewardedAutoClose(ad);
+                }
+            });
+            const char *types = method_getTypeEncoding(method);
+            if (!class_addMethod(cls, selector, replacement, types)) {
+                method_setImplementation(class_getInstanceMethod(cls, selector), replacement);
+            }
+            [installed addObject:key];
+            ABDebugLog(@"[INSTALL] %@.didDisplayAd: (rewarded delegate auto-close) -> OK", NSStringFromClass(cls));
+        }
+    }
+    objc_setAssociatedObject(delegate, &ABMAXRewardedDisplayPendingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 static IMP ABOriginalMARewardedAdShowAdIMP = NULL;
 static IMP ABOriginalMARewardedAdShowAdForPlacementIMP = NULL;
 static IMP ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP = NULL;
 static void AB_MARewardedAd_ShowAd_Passthrough(id self, SEL _cmd) {
+    ABMAXPrepareRewardedDelegate(self);
     ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAd PASSTHROUGH(表示後に自動クローズ)");
     if (ABOriginalMARewardedAdShowAdIMP) {
         ((void (*)(id, SEL))ABOriginalMARewardedAdShowAdIMP)(self, _cmd);
     }
 }
 static void AB_MARewardedAd_ShowAdForPlacement_Passthrough(id self, SEL _cmd, id placement) {
+    ABMAXPrepareRewardedDelegate(self);
     ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAdForPlacement: PASSTHROUGH placement=%@", placement);
     if (ABOriginalMARewardedAdShowAdForPlacementIMP) {
         ((void (*)(id, SEL, id))ABOriginalMARewardedAdShowAdForPlacementIMP)(self, _cmd, placement);
     }
 }
 static void AB_MARewardedAd_ShowAdForPlacementCustomData_Passthrough(id self, SEL _cmd, id placement, id customData) {
+    ABMAXPrepareRewardedDelegate(self);
     ABDebugLog(@"[AUTOCLOSE] MARewardedAd showAdForPlacement:customData: PASSTHROUGH placement=%@ customData=%@", placement, customData);
     if (ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP) {
         ((void (*)(id, SEL, id, id))ABOriginalMARewardedAdShowAdForPlacementCustomDataIMP)(self, _cmd, placement, customData);
