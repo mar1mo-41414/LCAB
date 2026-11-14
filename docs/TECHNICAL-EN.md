@@ -474,3 +474,22 @@ For symbolication, match the usedImages UUID to the binary's LC_UUID and use
 imageOffset, not an ASLR-adjusted absolute address. This report corresponds to the
 earlier run, not evidence of recurrence after NO_REMOVE. Verify launch with the
 fix; if it still fails, collect a new LCAB log and `.ips` from the same run.
+
+## AdMob app-open presentation entry
+
+After banner hierarchy preservation allowed startup, a follow-up log still shows
+a fullscreen `GADWebAdView`; the banner is hidden=1, alpha=0 and no existing
+fullscreen show hook fires. The rendering class is shared by ad formats and alone
+does not identify which API presented it.
+
+Add the previously unsupported `GADAppOpenAd.presentFromRootViewController:`
+using [Google's public specification](https://developers.google.com/admob/ios/api/reference/Classes/GADAppOpenAd).
+Check class/method existence, suppress presentation and asynchronously send
+will-present → will-dismiss → did-dismiss to `fullScreenContentDelegate` on the
+main queue, passing the actual ad and skipping absent optional methods. Do not
+emit reward, click or impression events. Networking, initialization, loading,
+banners and other fullscreen entry points are unchanged.
+
+Whether the reported overlay uses this entry is not yet device-verified. Confirm
+BLOCKED firing, startup continuation and subsequent foregrounding, not just
+installation OK. Do not hide generic webviews or dismiss arbitrary screens.

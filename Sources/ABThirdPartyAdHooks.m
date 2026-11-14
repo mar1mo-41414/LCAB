@@ -792,6 +792,20 @@ static void ABInstallMAXRewardedAutoClose(void) {
     }
 }
 
+/// AdMob起動時広告。表示を止めた後も終了通知を返し、起動画面の待機を解除する。
+/// GADInterstitialAdとは別クラスなので個別にフックする。
+static void AB_GADAppOpenAd_present(id self, SEL _cmd, id viewController) {
+    ABLogBlocked(self, _cmd);
+    SEL getter = NSSelectorFromString(@"fullScreenContentDelegate");
+    id delegate = [self respondsToSelector:getter] ? ((id (*)(id, SEL))objc_msgSend)(self, getter) : nil;
+    ABDebugLog(@"[CALLBACK] GADAppOpenAd.fullScreenContentDelegate = %@", delegate ? NSStringFromClass([delegate class]) : @"nil");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adWillPresentFullScreenContent:"), self);
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adWillDismissFullScreenContent:"), self);
+        ABCallDelegate1(delegate, NSSelectorFromString(@"adDidDismissFullScreenContent:"), self);
+    });
+}
+
 /// AdMobの報酬ハンドラだけではメディエーション側の表示/終了状態が更新されない。
 /// fullScreenContentDelegateへ表示→報酬→終了を通知する。SDKのロードや通信には触れない。
 static void AB_GADRewardedAd_present(id self, SEL _cmd, id viewController, void (^handler)(void)) {
@@ -1522,6 +1536,8 @@ void ABInstallThirdPartyAdHooks(void) {
     // Google AdMob
     ABLogSwizzle(@"GADInterstitialAd.presentFromRootViewController:",
                  ABSwizzleInstanceMethod(@"GADInterstitialAd", @selector(presentFromRootViewController:), (IMP)AB_NoOp_WithArg, kTypesArg));
+    ABLogSwizzle(@"GADAppOpenAd.presentFromRootViewController:",
+                 ABSwizzleInstanceMethod(@"GADAppOpenAd", @selector(presentFromRootViewController:), (IMP)AB_GADAppOpenAd_present, kTypesArg));
     ABLogSwizzle(@"GADRewardedAd.presentFromRootViewController:userDidEarnRewardHandler:",
                  ABSwizzleInstanceMethod(@"GADRewardedAd", @selector(presentFromRootViewController:userDidEarnRewardHandler:), (IMP)AB_GADRewardedAd_present, kTypesArgArg));
     ABInstallHideBannerHookSet(@"GADBannerView",
