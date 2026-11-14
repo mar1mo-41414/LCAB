@@ -427,3 +427,18 @@ Simulator用mockハーネスは実機確認とは別で、この開発環境で�
 セレクタは[GoogleのGADFullScreenContentDelegate仕様](https://developers.google.com/admob/ios/api/reference/Protocols/GADFullScreenContentDelegate)
 に基づきます。will-dismissは非推奨ですが、旧SDKの互換用に存在する場合のみ通知します。
 これは状態通知の欠落に対する修正であり、今回の症状の解消・報酬付与・再試行は実機で要確認です。
+
+## AdMobバナーの階層維持
+
+Tweak無効時には起動できるケースで、起動クラッシュ直前のLCABログが
+`GADBannerView didMoveToWindow` → `setHidden:YES` → 再度の`didMoveToWindow`
+で終わっていました。従来のフックは表示通知中に `removeFromSuperview` を呼ぶため、
+この並びはLCAB自身の切り離しでも発生します。例外情報がないためクラッシュ原因の確定では
+ありませんが、SDKのビュー所有権・外部制約と衝突するリスクを避け、AdMobも既存の
+NO_REMOVE版へ切り替えます。
+
+自身と子孫のhidden/layer opacity、hidden/alphaの書戻し抑止は維持します。
+親・兄弟やframeは変更せず、通常のSDK/アプリ側の追加・削除は妨げません。
+通信・ロード・全画面広告・報酬通知に変更はありません。空白枠が残る可能性はあります。
+この起動クラッシュの解消は実機未確認です。再発時は同じ起動の `.ips` を取得し、
+例外・クラッシュスレッド・スタックを確認してください。最終ログだけで原因を断定しません。
