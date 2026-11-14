@@ -120,3 +120,19 @@ A last banner BLOCKED entry localizes activity but does not establish a crash
 cause. After rebuilding, check cold launch, rotation/layout, banner refresh and
 normal game controls. The banner slot may remain reserved. If the crash persists,
 use the crash report rather than broadening UI hooks based only on the last log.
+
+## AdMob app-open regression
+
+Build `Tests/GADAppOpenTests.m` in place of the Unity harness in the Simulator
+command above, with a separate output name. Covers absent SDK, delayed class
+registration, repeated installation, inherited-method isolation, suppressed show,
+asynchronous ordered main-queue lifecycle with actual ad identity, a second ad,
+nil/non-conforming delegates and no click/impression notifications.
+
+Device check: after confirming launch no longer crashes, expect
+`[INSTALL] GADAppOpenAd.presentFromRootViewController: -> OK` and the corresponding
+`[BLOCKED]` during the launch ad attempt. Confirm dismissal callbacks and normal
+startup without an overlay, then relaunch/foreground again. If the hook does not
+fire, the app-open hypothesis is unconfirmed: collect the new log and inspect
+other SDK entry points rather than hiding generic webviews. Keep banner hierarchy
+preservation enabled. This new harness has not been run in the Linux environment.

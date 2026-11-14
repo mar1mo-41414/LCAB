@@ -28,7 +28,7 @@ LiveContainer上で動くiOSアプリに注入し、アプリ内広告のうち�
 |---|---|---|
 | Apple StoreKit | `SKStoreProductViewController` | 商品情報ロードを失敗扱いにし、presentもブロック |
 | Apple StoreKit | `SKOverlay` | 表示要求を無視 |
-| Google AdMob | `GADInterstitialAd` / `GADRewardedAd` / `GADBannerView` | show系をno-op化、バナーは非表示化 |
+| Google AdMob | `GADInterstitialAd` / `GADAppOpenAd` / `GADRewardedAd` / `GADBannerView` | show系をno-op化、バナーは非表示化 |
 | Meta Audience Network | `FBInterstitialAd` / `FBRewardedVideoAd` / `FBAdView` | show系をno-op化、バナーは非表示化 |
 | ironSource / LevelPlay | `ISBannerView` / `LPMBannerAdView` / `ISUnityAdsAdapter` | バナーを非表示化、Unity Adsインタースティシャルの表示を止め開始・表示・終了を通知 |
 | AppLovin MAX | `MAInterstitialAd` / `MARewardedAd` / `MAAppOpenAd` / `MAAdView` | show系をno-op化、バナーは非表示化 |

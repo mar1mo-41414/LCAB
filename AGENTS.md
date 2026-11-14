@@ -124,3 +124,8 @@
 - `.ips` のプロセス名がLiveContainerでも、usedImagesのゲスト実行ファイル・LCAB、procLaunch/captureTimeとLCABログの時刻を照合して対象実行か確認します。
 - SIGABRTの通常スタックだけでなく `lastExceptionBacktrace` を確認します。CoreAutoLayoutの制約変更中の例外でも、理由文なしに「共通祖先がない」等の例外理由までは断定しません。
 - 未シンボル化フレームはusedImagesのUUIDと解析対象Mach-OのLC_UUIDを照合してからimageOffsetで調べます。修正前の時刻のレポートを修正後の再発証拠とは扱いません。
+
+### 調査知見：AdMobの全画面広告とApp Openの区別
+
+- 全画面GADWebAdViewが見えていても、GADInterstitialAd経由とは限りません。Googleの起動時広告GADAppOpenAdは別クラスの表示入口なので、既存interstitialフックの登録成功だけで対応済みとしません。
+- App Open対応の詳細は技術資料を参照してください。描画クラスや起動時というタイミングは候補を絞る情報であり、実際の入口はBLOCKEDの発火で確認します。

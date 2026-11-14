@@ -462,3 +462,20 @@ NO_REMOVE版へ切り替えます。
 照合し、ASLR適用後の絶対アドレスではなくimageOffsetを用います。この解析データは
 前回の実行に対応するため、それ自体をNO_REMOVE修正後の再発証拠とは扱いません。
 修正後の起動結果を確認し、再発する場合は新しいログと同じ実行の `.ips` を取得します。
+
+## AdMob起動時広告の表示入口
+
+バナー階層維持後に起動可能となっても、全画面の `GADWebAdView` が残るログがありました。
+バナーはhidden=1・alpha=0で、既存の全画面showフックにBLOCKEDはありません。
+`GADWebAdView` は複数フォーマットの描画に使われるため、この名前だけで広告形式は断定しません。
+
+未対応だった `GADAppOpenAd.presentFromRootViewController:` を、
+[Googleの公開仕様](https://developers.google.com/admob/ios/api/reference/Classes/GADAppOpenAd)
+に基づいて追加します。実行時にクラス・メソッドの存在を確認し、表示を止め、
+`fullScreenContentDelegate` にメインキューで非同期にwill-present→will-dismiss→did-dismissを
+一度ずつ通知します。広告自身を渡し、任意メソッド未実装はスキップします。報酬・クリック・
+インプレッションは通知しません。通信・初期化・ロード・バナー・他の全画面入口は変更しません。
+
+今回の残存広告がこの入口を使用するかは実機未確認です。INSTALL成功のみで解消とせず、
+BLOCKED発火・起動完了・再フォアグラウンドを確認してください。汎用WebViewの非表示や
+画面の無条件dismissは行いません。
