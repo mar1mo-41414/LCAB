@@ -283,7 +283,7 @@ View階層ダンプ機能(`ABDumpVisibleBottomViews`)は、画面下部のView�
 
 対応済みのSDKを全てフックしても広告が消えない場合、`ABInstallThirdPartyAdHooks`内の
 `ABLogSuspiciousAdClasses`が使う診断用キーワードリスト(`Interstitial`/`Rewarded`/`GFP`等)に
-一致するクラス名を実行時に列挙してログへ出力する仕組みが有効です。ただし、キーワードに
+一致するクラス名を実行時に列挙してログへ出力する仕組みが有効です。キーワードは2026-11に拡充し、汎用フォーマット語(`Splash`/`AppOpen`/`NativeAd`/`Fullscreen`)に加えて、中国系(穿山甲国内版`BUAd`・优量汇`GDT`・Mintegral`MTG`等)、日本系(アドフリくん・i-mobile・maio・Zucks・AMoAd等)、英語圏(AdColony・Fyber・Tapjoy・Amazon APS等)のSDKブランド名・接頭辞も拾うようにしました。ただし、キーワードに
 含まれない命名のSDKは最初は見えません。実際にSnowでは"FAD"という未知のプレフィックスの
 クラスが最初は一切見えておらず、VIEWDUMPで偶然「iマーク本体」に対応するクラス名
 (`FADInformationIconView`)を発見してから、キーワードリストに`FAD`を追加して初めて

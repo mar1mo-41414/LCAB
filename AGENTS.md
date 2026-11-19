@@ -134,3 +134,10 @@
 
 - MARewardedAdのPASSTHROUGH後に自動終了ログがない場合、didDisplayAdの対象がUnity用delegateだけになっていないか確認します。SDK共通のdelegate取得経路を使い、アプリ名や特定のRootViewControllerへ固定フックしません。
 - 実delegateをラップする場合は元IMP・継承・super呼出し・同じクラスの非対象インスタンスを保護し、リワード待機状態と広告formatで予約を限定します。遅延中に別画面へ移る可能性にも注意し、不明なVCを無条件に閉じません。
+
+### 調査知見：地域別広告SDKのクラス接頭辞
+
+- 中国の国内版と海外版は別SDKのことがあります。穿山甲の国内版は `BUAdSDK` (`BU*`) で、海外版Pangle (`PAG*`) とはクラス体系が異なります。他に优量汇=`GDT*`、百度百青藤=`BaiduMobAd*`、快手联盟=`KSAd*`/`KS*`、Mintegral=`MTG*`、聚合層にGroMore (`ABUAd*`)・AnyThink (TopOn)・TradPlus・WindMill (ToBid/Sigmob)。
+- 日本系はアドフリくん=`Adfurikun`/`ADF*`、i-mobile=`Imobile*`、maio=`Maio*`、Zucks=`Zucks*`/`ZADN*`、AMoAd、AdGeneration=`ADG*`、Geniee=`GNAd*`、nend=`NAD*` (終了済みだが旧アプリに残る)。
+- 英語圏はAdColony、Fyber (旧Inneractive)、Tapjoy=`TJ*`、Amazon APS=`DTBAd*`、Verve/HyBid、VK広告 (旧myTarget)=`MTRG*`、Bigo Ads等。
+- `[SCAN]` のキーワードは大文字小文字を区別する部分一致です。フォーマット語 (`Splash`/`AppOpen`/`NativeAd`/`Fullscreen`) を併用すると、接頭辞付きクラスをブランド名なしでも拾えます。

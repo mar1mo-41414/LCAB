@@ -1434,7 +1434,35 @@ static void ABLogSuspiciousAdClasses(void) {
     // Bannerを含めるとGFPBannerAdView等のバナークラスも拾えるようにする。
     // "FAD"はSnowの画面下部にFADInformationIconView(=iマーク本体)を含む未知のネイティブ広告
     // レンダラーとして実機確認できたため追加。正体・全容はまだ不明。
-    NSArray<NSString *> *keywords = @[@"Interstitial", @"Rewarded", @"UnityAds", @"UADS", @"Playable", @"GFP", @"Banner", @"FAD"];
+    //
+    // キーワードは大文字小文字を区別する部分一致。汎用フォーマット語(Splash/AppOpen/
+    // NativeAd/Fullscreen)を併用すると、SDK固有の接頭辞が付いたクラス(例: BUSplashAd、
+    // GDTNativeAd)もブランド名なしで拾える。ブランド名は、フォーマット語を含まない
+    // 管理クラス(SDK本体・ローダー等)を拾うために入れる。短すぎる汎用文字列は誤検出が
+    // 増えるため避け、接頭辞は原則3文字以上の固有な形にする(診断用途なので多少の
+    // 誤検出は許容する)。
+    NSArray<NSString *> *keywords = @[
+        // 汎用フォーマット語・既知の手がかり
+        @"Interstitial", @"Rewarded", @"Banner", @"Splash", @"AppOpen", @"NativeAd",
+        @"Fullscreen", @"UnityAds", @"UADS", @"Playable", @"GFP", @"FAD",
+        // 中国系(いずれも未対応SDKの発見用)。穿山甲の国内版CSJはBUAdSDK(BU*系)で、
+        // 対応済みの海外版Pangle(PAG*)とは別SDK。优量汇=GDT*、百度百青藤=BaiduMobAd*、
+        // 快手联盟=KSAd*、Mintegral=MTG*。聚合(メディエーション)側はGroMore・
+        // AnyThink(TopOn)・TradPlus・WindMill(ToBid/Sigmob)。
+        @"BUAd", @"GDT", @"BaiduMobAd", @"KSAd", @"MTG", @"GroMore", @"ABUAd",
+        @"AnyThink", @"TradPlus", @"WindMill", @"Sigmob",
+        // 日本系。アドフリくん=Adfurikun/ADF*、i-mobile=Imobile*、maio=Maio*、
+        // Zucks=Zucks*/ZADN*、AMoAd、AdGeneration=ADG*、Geniee=GNAd*、nend=NAD*
+        // (サービス終了済みだが旧アプリに残る)、Five=FiveAd*、fluct、AdStir。
+        @"Adfurikun", @"ADF", @"Imobile", @"Maio", @"Zucks", @"ZADN", @"AMoAd",
+        @"AdGeneration", @"ADG", @"Geniee", @"GNAd", @"Nend", @"NAD", @"FiveAd",
+        @"Fluct", @"AdStir", @"MicroAd",
+        // 英語圏・その他。AdColony、Fyber(旧Inneractive)、Tapjoy、Ogury、
+        // Amazon APS=DTBAd*、Verve/HyBid、Start.io=StartApp*、Yandex、
+        // VK広告(旧myTarget)=MTRG*、Bigo Ads、BidMachine、MobileFuse。
+        @"AdColony", @"Fyber", @"Inneractive", @"Tapjoy", @"Ogury", @"DTBAd",
+        @"HyBid", @"StartApp", @"Yandex", @"MTRG", @"Bigo", @"BidMachine", @"MobileFuse",
+    ];
     int bufferCount = objc_getClassList(NULL, 0);
     if (bufferCount <= 0) {
         return;

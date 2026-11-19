@@ -286,7 +286,11 @@ it from 30 seconds to 2 minutes).
 
 When every supported SDK is hooked but an ad still won't go away, `ABLogSuspiciousAdClasses` (used
 inside `ABInstallThirdPartyAdHooks`) enumerates runtime-registered classes matching a diagnostic
-keyword list (`Interstitial`/`Rewarded`/`GFP`/etc.) and logs them. Classes with a naming scheme not
+keyword list (`Interstitial`/`Rewarded`/`GFP`/etc.) and logs them. The list was expanded in
+2026-11 with generic format words (`Splash`/`AppOpen`/`NativeAd`/`Fullscreen`) plus SDK brand
+names and prefixes from China (domestic CSJ `BUAd`, GDT, Mintegral `MTG`, etc.), Japan
+(Adfurikun, i-mobile, maio, Zucks, AMoAd, etc.), and English-speaking markets (AdColony,
+Fyber, Tapjoy, Amazon APS, etc.). Classes with a naming scheme not
 in that list won't show up at first, though. On Snow, an unknown prefix "FAD" was completely
 invisible at first; only after the view tree dump happened to reveal a class name that mapped
 directly to the "i" info icon itself (`FADInformationIconView`) — and after adding `FAD` to the
